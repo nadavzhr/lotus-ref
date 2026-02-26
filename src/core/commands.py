@@ -300,9 +300,11 @@ class ToggleLineCommentCommand(ICommand):
 
     def _uncomment(self, line: DocumentLine) -> DocumentLine:
         """Strip comment prefix and fully re-parse (fresh identity)."""
-        raw = line.raw_text.lstrip()
-        if raw.startswith("# "):
-            raw = raw[2:]
-        elif raw.startswith("#"):
-            raw = raw[1:]
+        raw = line.raw_text
+        stripped = raw.lstrip()
+        indent = raw[: len(raw) - len(stripped)]
+        if stripped.startswith("# "):
+            raw = indent + stripped[2:]
+        elif stripped.startswith("#"):
+            raw = indent + stripped[1:]
         return self._parse_fn(raw)

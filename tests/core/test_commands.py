@@ -376,6 +376,14 @@ class TestToggleLineCommentCommand:
         cmd.execute()
         assert doc[0].raw_text == "hello"
 
+    def test_uncomment_preserves_indentation(self):
+        comment_line = _line("a", "    # indented comment",
+                             validation_result=ValidationResult(status=LineStatus.COMMENT))
+        doc = Document(DocumentType.AF, lines=[comment_line])
+        cmd = ToggleLineCommentCommand(doc, ["a"], _dummy_parse_fn)
+        cmd.execute()
+        assert doc[0].raw_text == "    indented comment"
+
     def test_undo_comment(self):
         doc = _doc(("a", "some data"))
         cmd = ToggleLineCommentCommand(doc, ["a"], _dummy_parse_fn)
@@ -431,7 +439,7 @@ class TestToggleLineCommentCommand:
         cmd.undo()
         assert _texts(doc) == ["line1", "line2", "line3"]
 
-    def test_round_trip_comment_uncomment_produces_new_identity(self):
+    def test_sequential_toggle_operations_produce_new_identity(self):
         """
         Comment then uncomment — the uncommented line must be treated
         as completely new (fresh line_id, fresh validation).

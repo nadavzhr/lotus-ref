@@ -9,6 +9,16 @@ from core.interfaces import (
     IEditController,
     IEditSessionState,
 )
+from core.commands import (
+    ICommand,
+    UndoRedoStack,
+    AppendLineCommand,
+    InsertLineCommand,
+    RemoveLineCommand,
+    ReplaceLineCommand,
+    SwapLinesCommand,
+    ToggleLineCommentCommand,
+)
 
 __all__ = [
     "DocumentType",
@@ -23,4 +33,12 @@ __all__ = [
     "INetlistQueryService",
     "IEditController",
     "IEditSessionState",
+    "ICommand",
+    "UndoRedoStack",
+    "AppendLineCommand",
+    "InsertLineCommand",
+    "RemoveLineCommand",
+    "ReplaceLineCommand",
+    "SwapLinesCommand",
+    "ToggleLineCommentCommand",
 ]

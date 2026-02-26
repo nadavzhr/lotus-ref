@@ -97,6 +97,13 @@ class Document:
         self._rebuild_index()
         return removed
 
+    def swap_lines(self, line_id_a: str, line_id_b: str) -> None:
+        """Swap two lines by their IDs.  Raises KeyError if either is missing."""
+        pos_a = self._index[line_id_a]
+        pos_b = self._index[line_id_b]
+        self._lines[pos_a], self._lines[pos_b] = self._lines[pos_b], self._lines[pos_a]
+        self._rebuild_index()
+
     def replace_line(self, line_id: str, new_line: DocumentLine) -> None:
         """
         Replace a line in-place, keeping the same position.

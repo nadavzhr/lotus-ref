@@ -99,6 +99,7 @@
   .badge-error { background: var(--red); color: var(--bg); }
   .badge-comment { background: var(--comment-color); color: var(--text); }
   .badge-empty { background: var(--empty-color); color: var(--subtext); }
+  .badge-conflict { background: #cba6f7; color: var(--bg); }
 
   /* --- Line table --- */
   .lines-table {
@@ -128,6 +129,7 @@
   .lines-table tr.status-error td:first-child { border-left: 3px solid var(--red); }
   .lines-table tr.status-comment td:first-child { border-left: 3px solid var(--comment-color); }
   .lines-table tr.status-empty td:first-child { border-left: 3px solid var(--empty-color); }
+  .lines-table tr.status-conflict td:first-child { border-left: 3px solid #cba6f7; }
   .lines-table tr.status-comment td { color: var(--comment-color); }
   .lines-table tr.status-empty td { color: var(--empty-color); }
 
@@ -146,6 +148,7 @@
   .pill-error { background: rgba(243,139,168,0.15); color: var(--red); }
   .pill-comment { background: rgba(108,112,134,0.15); color: var(--comment-color); }
   .pill-empty { background: rgba(69,71,90,0.15); color: var(--empty-color); }
+  .pill-conflict { background: rgba(203,166,247,0.15); color: #cba6f7; }
 
   .line-text {
     white-space: pre-wrap;
@@ -475,6 +478,7 @@ function renderStatusBar(counts) {
     counts.ok ? badgeHtml('OK', counts.ok, 'badge-ok') : '',
     counts.warning ? badgeHtml('WARN', counts.warning, 'badge-warning') : '',
     counts.error ? badgeHtml('ERROR', counts.error, 'badge-error') : '',
+    counts.conflict ? badgeHtml('CONFLICT', counts.conflict, 'badge-conflict') : '',
     counts.comment ? badgeHtml('COMMENT', counts.comment, 'badge-comment') : '',
   ].filter(Boolean).join('');
 }
@@ -489,11 +493,24 @@ async function refreshLines() {
 
 function renderLines(lines) {
   const tbody = document.getElementById('lines-body');
+  // Build a position lookup for conflict display
+  const posById = {};
+  lines.forEach(l => { posById[l.line_id] = l.position + 1; });
+
   tbody.innerHTML = lines.map(line => {
     const msgs = [
       ...line.errors.map(e => `<span class="err">✗ ${esc(e)}</span>`),
       ...line.warnings.map(w => `<span class="warn">⚠ ${esc(w)}</span>`),
-    ].join('<br>');
+    ];
+
+    // Show conflict info if present
+    if (line.conflict_info) {
+      const otherLines = line.conflict_info.conflicting_line_ids
+        .map(id => '#' + (posById[id] || '?'))
+        .join(', ');
+      const nets = line.conflict_info.shared_nets.join(', ');
+      msgs.push(`<span style="color:#cba6f7">⚡ Conflicts with line${line.conflict_info.conflicting_line_ids.length > 1 ? 's' : ''} ${esc(otherLines)} (shared: ${esc(nets)})</span>`);
+    }
 
     const editBtn = line.has_data
       ? `<button class="edit-btn" onclick="startEdit('${line.line_id}', ${line.position})">Edit</button>`
@@ -503,7 +520,7 @@ function renderLines(lines) {
       <td class="line-num">${line.position + 1}</td>
       <td class="line-status">${pillHtml(line.status)}</td>
       <td class="line-text">${esc(line.raw_text)}</td>
-      <td class="line-messages">${msgs}</td>
+      <td class="line-messages">${msgs.join('<br>')}</td>
       <td class="edit-col">${editBtn}</td>
     </tr>`;
   }).join('');

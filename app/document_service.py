@@ -12,6 +12,7 @@ import dataclasses
 from typing import Any, Optional
 
 from core import DocumentType, Document, DocumentLine, LineData, LineStatus, IEditController, INetlistQueryService
+from core.conflict_store import ConflictStore, resolve_line_nets
 from doc_types.af import AfLineData, AfEditController, serializer as af_serializer
 from doc_types.mutex import MutexLineData, FEVMode, MutexEditController, serializer as mutex_serializer
 from infrastructure import load_document, save_document
@@ -26,6 +27,7 @@ class DocumentService:
     def __init__(self, nqs: INetlistQueryService):
         self._nqs: INetlistQueryService = nqs
         self._documents: dict[str, Document] = {}
+        self._conflict_stores: dict[str, ConflictStore] = {}
         self._controllers: dict[DocumentType, IEditController] = {
             DocumentType.AF: AfEditController(self._nqs),
             DocumentType.MUTEX: MutexEditController(self._nqs),
@@ -39,6 +41,7 @@ class DocumentService:
         """Load a file into memory and return a summary."""
         doc = load_document(file_path, doc_type, self._nqs)
         self._documents[doc_id] = doc
+        self._build_conflict_store(doc_id, doc)
         return self._document_summary(doc_id, doc)
 
     def get_document(self, doc_id: str) -> Document:
@@ -57,13 +60,15 @@ class DocumentService:
     def get_lines(self, doc_id: str) -> list[dict]:
         """Return all lines in a document as JSON-friendly dicts."""
         doc = self._documents[doc_id]
-        return [self._serialize_line(i, line) for i, line in enumerate(doc.lines)]
+        store = self._conflict_stores.get(doc_id)
+        return [self._serialize_line(i, line, store) for i, line in enumerate(doc.lines)]
 
     def get_line(self, doc_id: str, line_id: str) -> dict:
         doc = self._documents[doc_id]
         line = doc.get_line(line_id)
         pos = doc.get_position(line_id)
-        return self._serialize_line(pos, line)
+        store = self._conflict_stores.get(doc_id)
+        return self._serialize_line(pos, line, store)
 
     # ------------------------------------------------------------------
     # Edit flow
@@ -127,8 +132,12 @@ class DocumentService:
         )
         doc.replace_line(line_id, new_line)
 
+        # Incrementally update conflict store for this line
+        self._update_conflict_for_line(doc_id, new_line)
+
         pos = doc.get_position(line_id)
-        return self._serialize_line(pos, new_line)
+        store = self._conflict_stores.get(doc_id)
+        return self._serialize_line(pos, new_line, store)
 
     # ------------------------------------------------------------------
     # Save
@@ -218,17 +227,28 @@ class DocumentService:
             validation_result=vr,
         )
         doc.replace_line(line_id, new_line)
+
+        # Incrementally update conflict store for this line
+        self._update_conflict_for_line(doc_id, new_line)
+
         pos = doc.get_position(line_id)
-        return self._serialize_line(pos, new_line)
+        store = self._conflict_stores.get(doc_id)
+        return self._serialize_line(pos, new_line, store)
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _document_summary(doc_id: str, doc: Document) -> dict:
+    def _document_summary(self, doc_id: str, doc: Document) -> dict:
         from collections import Counter
+        store = self._conflict_stores.get(doc_id)
         statuses = Counter(line.status.value for line in doc.lines)
+        if store:
+            conflict_count = sum(
+                1 for line in doc.lines if store.is_conflicting(line.line_id)
+            )
+            if conflict_count:
+                statuses["conflict"] = conflict_count
         return {
             "doc_id": doc_id,
             "doc_type": doc.doc_type.value,
@@ -238,16 +258,34 @@ class DocumentService:
         }
 
     @staticmethod
-    def _serialize_line(position: int, line: DocumentLine) -> dict:
+    def _serialize_line(
+        position: int,
+        line: DocumentLine,
+        conflict_store: Optional[ConflictStore] = None,
+    ) -> dict:
         vr = line.validation_result
+        status = line.status.value
+
+        # Conflict overlay — if the line is in conflict, override display status
+        conflict_info = None
+        if conflict_store is not None:
+            info = conflict_store.get_conflict_info(line.line_id)
+            if info is not None:
+                status = LineStatus.CONFLICT.value
+                conflict_info = {
+                    "conflicting_line_ids": sorted(info.conflicting_line_ids),
+                    "shared_nets": sorted(info.shared_nets),
+                }
+
         result = {
             "line_id": line.line_id,
             "position": position,
             "raw_text": line.raw_text,
-            "status": line.status.value,
+            "status": status,
             "errors": vr.errors,
             "warnings": vr.warnings,
             "has_data": line.data is not None,
+            "conflict_info": conflict_info,
         }
         if line.data is not None:
             result["data"] = dataclasses.asdict(line.data)
@@ -290,6 +328,26 @@ class DocumentService:
         if doc.doc_type != DocumentType.MUTEX:
             raise ValueError(f"Document {doc_id} is not a MUTEX document")
         return self._controllers[DocumentType.MUTEX]
+
+    def _build_conflict_store(self, doc_id: str, doc: Document) -> None:
+        """Build the conflict store for all data lines in a document."""
+        store = ConflictStore()
+        for line in doc.lines:
+            if line.data is not None:
+                nets = resolve_line_nets(line.data, self._nqs)
+                store.update_line(line.line_id, nets)
+        self._conflict_stores[doc_id] = store
+
+    def _update_conflict_for_line(self, doc_id: str, line: DocumentLine) -> None:
+        """Incrementally update the conflict store for a single edited line."""
+        store = self._conflict_stores.get(doc_id)
+        if store is None:
+            return
+        if line.data is not None:
+            nets = resolve_line_nets(line.data, self._nqs)
+            store.update_line(line.line_id, nets)
+        else:
+            store.remove_line(line.line_id)
 
     @staticmethod
     def _serialize_mutex_session(ctrl: MutexEditController) -> dict:

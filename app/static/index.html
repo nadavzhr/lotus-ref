@@ -21,6 +21,7 @@
     --empty-color: #45475a;
     --teal: #94e2d5;
     --peach: #fab387;
+    --purple: #cba6f7;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -99,7 +100,7 @@
   .badge-error { background: var(--red); color: var(--bg); }
   .badge-comment { background: var(--comment-color); color: var(--text); }
   .badge-empty { background: var(--empty-color); color: var(--subtext); }
-  .badge-conflict { background: #cba6f7; color: var(--bg); }
+  .badge-conflict { background: var(--purple); color: var(--bg); }
 
   /* --- Line table --- */
   .lines-table {
@@ -129,7 +130,7 @@
   .lines-table tr.status-error td:first-child { border-left: 3px solid var(--red); }
   .lines-table tr.status-comment td:first-child { border-left: 3px solid var(--comment-color); }
   .lines-table tr.status-empty td:first-child { border-left: 3px solid var(--empty-color); }
-  .lines-table tr.status-conflict td:first-child { border-left: 3px solid #cba6f7; }
+  .lines-table tr.status-conflict td:first-child { border-left: 3px solid var(--purple); }
   .lines-table tr.status-comment td { color: var(--comment-color); }
   .lines-table tr.status-empty td { color: var(--empty-color); }
 
@@ -148,7 +149,7 @@
   .pill-error { background: rgba(243,139,168,0.15); color: var(--red); }
   .pill-comment { background: rgba(108,112,134,0.15); color: var(--comment-color); }
   .pill-empty { background: rgba(69,71,90,0.15); color: var(--empty-color); }
-  .pill-conflict { background: rgba(203,166,247,0.15); color: #cba6f7; }
+  .pill-conflict { background: rgba(203,166,247,0.15); color: var(--purple); }
 
   .line-text {
     white-space: pre-wrap;
@@ -509,7 +510,7 @@ function renderLines(lines) {
         .map(id => '#' + (posById[id] || '?'))
         .join(', ');
       const nets = line.conflict_info.shared_nets.join(', ');
-      msgs.push(`<span style="color:#cba6f7">⚡ Conflicts with line${line.conflict_info.conflicting_line_ids.length > 1 ? 's' : ''} ${esc(otherLines)} (shared: ${esc(nets)})</span>`);
+      msgs.push(`<span style="color:var(--purple)">⚡ Conflicts with line${line.conflict_info.conflicting_line_ids.length > 1 ? 's' : ''} ${esc(otherLines)} (shared: ${esc(nets)})</span>`);
     }
 
     const editBtn = line.has_data

@@ -22,12 +22,9 @@ from app.routes import router, init_service
 
 app = FastAPI(title="DCFG Editor Prototype")
 
-sys.path.append("/nfs/site/disks/cccad_totem/work/nadavzoh/testing-ground/lotus/")
-sys.path.append("/nfs/site/disks/cccad_totem/work/nadavzoh/testing-ground/fly/")
-from fly.fly_netlist.FlyNetlistBuilder import FlyNetlistBuilder
-fly_netlist_builder = FlyNetlistBuilder()
-from nqs.netlist_query_service import NetlistQueryService  # noqa — src/nqs/
-nqs = NetlistQueryService(cell="dcchunkrotd", spice_file="/nfs/site/disks/cccad_totem/work/nadavzoh/WARDS/dcchunkrotd/netlists/spice/dcchunkrotd.sp", fly_netlist=fly_netlist_builder)
+from nqs.spice_nqs import SpiceNetlistQueryService  # noqa — src/nqs/
+_spice_file = os.path.join(_project_root, "data", "spice", "mycell.sp")
+nqs = SpiceNetlistQueryService(cell="mycell", spice_file=_spice_file)
 
 init_service(DocumentService(nqs=nqs))
 

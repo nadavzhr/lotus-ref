@@ -1,0 +1,31 @@
+# af
+# {.*:.*} 0.0001 net-regexp_template-regexp_sch_em_sh
+{in1} 0.5 net-regular_em_sh
+{a:oa2} 1 net-regular_template-regular_em_sh
+{ia1/oa2} 1 net-regular_em_sh
+{b:xo1} 1 net-regular_template-regular_sch_em_sh
+{ia1/ib/n1} 0.5 net-regular_sch_em_sh
+{b:ic/id1/n3} 0.5 net-regular_template-regular_em_sh
+{in1} 0.5 net-regular_em_sh
+{mycell:in1} 0.5 net-regular_template-regular_em_sh
+{mycell:in2} 0.5 net-regular_template-regular_em_sh
+{d:n3} 0.123 net-regular_template-regular_sch_em_sh
+{c:n2} 0.123 net-regular_template-regular_sch_em_sh
+{b:n1} 0.123 net-regular_template-regular_sch_em_sh
+{ia1/ib/*} 1 net-regexp_em_sh
+{a:ib/ic/id1/m3} 1.0 net-regular_template-regular_em_sh
+{d:m3} 0.456 net-regular_template-regular_sch_em_sh
+{c:m2} 0.456 net-regular_template-regular_sch_em_sh
+{b:nonpinb} 0.456 net-regular_template-regular_sch_em_sh
+
+{d:gd2} 1 net-regular_template-regular_sch_em_sh
+{ia1/ib/ic/id1/gd2} 1 net-regular_sch_em_sh
+{ia2/ib/ic/id1/gd2} 1.0 net-regular_em_sh
+{.*:asdasddsadsa} 0.5 net-regular_template-regexp_em_sh
+
+{d:gd1} 1.0 net-regular_template-regular_em_sh
+{ia1/ib/ic/id1/gd1} 1.0 net-regular_em_sh
+{ia2/ib/ic/id1/gd1} 1.0 net-regular_em_sh
+
+{ia1/ib/ic/id2/gd2} 1 net-regular_sch_em_sh
+{a:ib/ic/id1/gd1} 1.0 net-regular_template-regular_em_sh

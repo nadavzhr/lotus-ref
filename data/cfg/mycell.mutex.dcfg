@@ -1,0 +1,6 @@
+# mutex
+mutex1_low regular ia1/oa1 ia1/ib/nonpinb on=ia1/ib/nonpinb
+mutex1_high template b o1 xo1 on=xo1
+
+mutex1_high template b ic/id1/n3 nonpinb on=nonpinb
+mutex1_high template d m3 o3 on=o3

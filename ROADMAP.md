@@ -59,26 +59,9 @@ the controller / session.  Add thin Pydantic models at the JSON → domain
 boundary (`from_dict` in each handler) to get early, standardised
 validation with clear error messages.
 
-### Dry-Run Validation Endpoint
-Add `POST /api/documents/{doc_id}/lines/{position}/validate` that runs the
-full two-layer validation pipeline without committing, returning the
-`ValidationResult` as JSON.  Enables a "Check" button in the UI.
-
 ---
 
 ## Medium-Term
-
-### File Browser / Directory Listing Endpoint
-Expose `GET /api/files?root=<path>` that returns the directory tree under
-a given root, filtered to relevant extensions (`.dcfg`, `.dcfg.gz`,
-`.sp`).  The frontend can use this to let users pick files to load
-instead of typing paths manually.
-
-### Diff / Preview Before Save
-Before writing to disk, compute a unified diff (Python `difflib`) between
-the file on disk and the in-memory document.  Expose it via
-`GET /api/documents/{doc_id}/diff` so the frontend can show a side-by-side
-or inline diff view before the user confirms the save.
 
 ### Problems Panel for Conflict Exploration
 Group all lines with `status == conflict` into a dedicated view.  For each

@@ -446,3 +446,121 @@ class TestInsertBlankLine:
             assert result["data"]["af_value"] == 0.42
         finally:
             os.unlink(path)
+
+
+# ==================================================================
+# Undo / Redo (integration through DocumentService)
+# ==================================================================
+
+class TestUndoRedo:
+
+    def test_undo_commit_edit_restores_old_line(self, svc: DocumentService):
+        """Undo a commit_edit should restore the original raw_text."""
+        path = _write_tmp(AF_LINES)
+        try:
+            svc.load("d1", path, DocumentType.AF)
+            # Find a data line (skip comment / blank)
+            lines = svc.get_lines("d1")
+            data_line = next(l for l in lines if l["has_data"])
+            pos = data_line["position"]
+            original_raw = data_line["raw_text"]
+
+            # Edit the line
+            svc.hydrate_session("d1", pos, fields={
+                "template": None,
+                "net": "in1",
+                "af_value": 0.99,
+                "is_em_enabled": True,
+                "is_sh_enabled": True,
+            })
+            svc.commit_edit("d1", pos)
+            assert svc.get_line("d1", pos)["raw_text"] != original_raw
+
+            # Undo
+            result = svc.undo("d1")
+            assert result["action"] == "replace"
+            assert result["can_redo"] is True
+            assert svc.get_line("d1", pos)["raw_text"] == original_raw
+        finally:
+            os.unlink(path)
+
+    def test_undo_delete_restores_line(self, svc: DocumentService):
+        """Undo a delete_line should restore the removed line."""
+        path = _write_tmp(AF_LINES)
+        try:
+            svc.load("d1", path, DocumentType.AF)
+            original_count = svc.get_document("d1").__len__()
+
+            svc.delete_line("d1", 0)
+            assert svc.get_document("d1").__len__() == original_count - 1
+
+            result = svc.undo("d1")
+            assert result["action"] == "insert"
+            assert svc.get_document("d1").__len__() == original_count
+        finally:
+            os.unlink(path)
+
+    def test_undo_insert_removes_line(self, svc: DocumentService):
+        """Undo an insert_blank_line should remove it."""
+        path = _write_tmp(AF_LINES)
+        try:
+            svc.load("d1", path, DocumentType.AF)
+            original_count = svc.get_document("d1").__len__()
+
+            svc.insert_blank_line("d1", 0)
+            assert svc.get_document("d1").__len__() == original_count + 1
+
+            result = svc.undo("d1")
+            assert result["action"] == "remove"
+            assert svc.get_document("d1").__len__() == original_count
+        finally:
+            os.unlink(path)
+
+    def test_redo_after_undo(self, svc: DocumentService):
+        """Redo should reapply the undone operation."""
+        path = _write_tmp(AF_LINES)
+        try:
+            svc.load("d1", path, DocumentType.AF)
+            svc.insert_blank_line("d1", 0)
+            svc.undo("d1")
+            original_count = svc.get_document("d1").__len__()
+
+            result = svc.redo("d1")
+            assert result["action"] == "insert"
+            assert svc.get_document("d1").__len__() == original_count + 1
+        finally:
+            os.unlink(path)
+
+    def test_undo_nothing_raises(self, svc: DocumentService):
+        """Undo on a freshly loaded document should raise ValueError."""
+        path = _write_tmp(AF_LINES)
+        try:
+            svc.load("d1", path, DocumentType.AF)
+            with pytest.raises(ValueError, match="Nothing to undo"):
+                svc.undo("d1")
+        finally:
+            os.unlink(path)
+
+    def test_redo_nothing_raises(self, svc: DocumentService):
+        """Redo with empty redo stack should raise ValueError."""
+        path = _write_tmp(AF_LINES)
+        try:
+            svc.load("d1", path, DocumentType.AF)
+            with pytest.raises(ValueError, match="Nothing to redo"):
+                svc.redo("d1")
+        finally:
+            os.unlink(path)
+
+    def test_summary_includes_undo_redo_flags(self, svc: DocumentService):
+        """Document summary should include can_undo / can_redo."""
+        path = _write_tmp(AF_LINES)
+        try:
+            summary = svc.load("d1", path, DocumentType.AF)
+            assert summary["can_undo"] is False
+            assert summary["can_redo"] is False
+
+            svc.insert_blank_line("d1", 0)
+            docs = svc.list_documents()
+            assert docs[0]["can_undo"] is True
+        finally:
+            os.unlink(path)

@@ -17,7 +17,7 @@ import re
 from collections import Counter
 from typing import Any, Optional
 
-from core import DocumentType, Document, DocumentLine, HasNetSpecs, LineStatus, IEditController, INetlistQueryService
+from core import DocumentType, Document, DocumentLine, HasNetSpecs, LineStatus, IEditController, INetlistQueryService, MutationRecord
 from core.conflict_store import ConflictDetector
 from core.validation_result import ValidationResult
 from doc_types.af import AfEditController
@@ -271,6 +271,38 @@ class DocumentService:
         return {"status": "saved", "file_path": target}
 
     # ------------------------------------------------------------------
+    # Undo / Redo
+    # ------------------------------------------------------------------
+
+    def undo(self, doc_id: str) -> dict:
+        """Undo the most recent mutation in *doc_id*.
+
+        Returns a dict with the undo result and current undo/redo state.
+        Raises ``ValueError`` when nothing to undo.
+        """
+        doc = self._documents[doc_id]
+        record = doc.undo()
+        if record is None:
+            raise ValueError("Nothing to undo")
+        self._sync_conflicts_from_record(doc_id, record)
+        logger.info("Undo %s in doc=%s at pos=%d", record.kind, doc_id, record.position)
+        return self._mutation_response(doc_id, doc, record)
+
+    def redo(self, doc_id: str) -> dict:
+        """Redo the most recently undone mutation in *doc_id*.
+
+        Returns a dict with the redo result and current undo/redo state.
+        Raises ``ValueError`` when nothing to redo.
+        """
+        doc = self._documents[doc_id]
+        record = doc.redo()
+        if record is None:
+            raise ValueError("Nothing to redo")
+        self._sync_conflicts_from_record(doc_id, record)
+        logger.info("Redo %s in doc=%s at pos=%d", record.kind, doc_id, record.position)
+        return self._mutation_response(doc_id, doc, record)
+
+    # ------------------------------------------------------------------
     # NQS Query Preview
     # ------------------------------------------------------------------
 
@@ -347,6 +379,8 @@ class DocumentService:
             "file_path": doc.file_path,
             "total_lines": len(doc),
             "status_counts": dict(statuses),
+            "can_undo": doc.can_undo,
+            "can_redo": doc.can_redo,
         }
 
     @staticmethod
@@ -414,6 +448,37 @@ class DocumentService:
             detector = ConflictDetector(self._nqs)
             self._conflict_detectors[doc_id] = detector
         detector.rebuild(doc.lines)
+
+    def _sync_conflicts_from_record(
+        self, doc_id: str, record: MutationRecord,
+    ) -> None:
+        """Update the conflict detector after an undo/redo mutation."""
+        detector = self._conflict_detectors.get(doc_id)
+        if detector is None:
+            return
+        if record.kind == "remove":
+            detector.remove_line(record.line_id)
+        else:  # insert or replace
+            data = record.new_line.data if record.new_line else None
+            detector.update_line(record.line_id, data)
+
+    def _mutation_response(
+        self, doc_id: str, doc: Document, record: MutationRecord,
+    ) -> dict:
+        """Build the JSON response for an undo/redo operation."""
+        detector = self._conflict_detectors.get(doc_id)
+        result: dict = {
+            "action": record.kind,
+            "position": record.position,
+            "can_undo": doc.can_undo,
+            "can_redo": doc.can_redo,
+        }
+        if record.kind != "remove":
+            line = doc[record.position]
+            result["line"] = self._serialize_line(
+                record.position, line, detector, doc,
+            )
+        return result
 
     @staticmethod
     def _serialize_mutex_session(ctrl: MutexEditController) -> dict:

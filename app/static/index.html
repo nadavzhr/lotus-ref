@@ -370,6 +370,73 @@
     gap: 8px;
     margin-bottom: 12px;
     align-items: center;
+    flex-wrap: wrap;
+  }
+  .toolbar-spacer { flex: 1; }
+
+  /* Undo / Redo */
+  .undo-redo-group {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+  .undo-redo-group button {
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--overlay);
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: opacity 0.15s, background 0.15s;
+  }
+  .undo-redo-group button:hover:not(:disabled) { background: var(--overlay); }
+  .undo-redo-group button:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  /* Search / Filter bar */
+  .search-bar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+  }
+  .search-bar input[type="text"] {
+    background: var(--surface2);
+    border: 1px solid var(--overlay);
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 12px;
+    min-width: 220px;
+    flex: 1;
+    max-width: 400px;
+  }
+  .search-bar input[type="text"]::placeholder { color: var(--subtext); }
+  .search-bar select {
+    background: var(--surface2);
+    border: 1px solid var(--overlay);
+    color: var(--text);
+    padding: 6px 8px;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 12px;
+  }
+  .search-bar label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--subtext);
+  }
+  .search-bar .search-count {
+    font-size: 11px;
+    color: var(--subtext);
+    margin-left: 4px;
   }
 </style>
 </head>
@@ -394,9 +461,31 @@
     <div id="doc-toolbar">
       <h2 id="doc-title"></h2>
       <button class="teal-btn" onclick="insertLineAt(0)" title="Insert a new line at the top">+ New Line</button>
+      <div class="toolbar-spacer"></div>
+      <div class="undo-redo-group">
+        <button id="undo-btn" disabled onclick="undoAction()" title="Undo (Ctrl+Z)">↩ Undo</button>
+        <button id="redo-btn" disabled onclick="redoAction()" title="Redo (Ctrl+Y)">↪ Redo</button>
+      </div>
       <button class="save-btn" onclick="saveDoc()">💾 Save</button>
     </div>
     <div id="status-bar" class="status-bar"></div>
+
+    <!-- Search / Filter bar -->
+    <div class="search-bar" id="search-bar">
+      <input type="text" id="search-input" placeholder="Search lines…" oninput="onSearchInput()">
+      <select id="status-filter" onchange="onSearchInput()">
+        <option value="">All statuses</option>
+        <option value="ok">OK</option>
+        <option value="warning">Warning</option>
+        <option value="error">Error</option>
+        <option value="conflict">Conflict</option>
+        <option value="comment">Comment</option>
+      </select>
+      <label>
+        <input type="checkbox" id="search-regex" onchange="onSearchInput()" style="width:14px;height:14px"> Regex
+      </label>
+      <span id="search-count" class="search-count"></span>
+    </div>
 
     <!-- Edit panel -->
     <div id="edit-panel" class="edit-panel">
@@ -432,6 +521,9 @@ let editingPosition = null;
 let editingLineData = null;
 let linesData = [];
 let mutexSession = null;
+let canUndo = false;
+let canRedo = false;
+let searchDebounceTimer = null;
 
 // ---- Helpers ----
 
@@ -480,6 +572,8 @@ async function loadDoc() {
     document.getElementById('doc-title').textContent =
       `${summary.file_path}  (${summary.total_lines} lines)`;
     renderStatusBar(summary.status_counts);
+    updateUndoRedoState(summary.can_undo, summary.can_redo);
+    clearSearch();
     await refreshLines();
     document.getElementById('doc-view').classList.remove('hidden');
     closeEdit();
@@ -499,12 +593,124 @@ function renderStatusBar(counts) {
   ].filter(Boolean).join('');
 }
 
+// ---- Undo / Redo ----
+
+function updateUndoRedoState(undo, redo) {
+  canUndo = !!undo;
+  canRedo = !!redo;
+  document.getElementById('undo-btn').disabled = !canUndo;
+  document.getElementById('redo-btn').disabled = !canRedo;
+}
+
+async function undoAction() {
+  if (!currentDocId) return;
+  try {
+    const res = await fetch(`${API}/documents/${currentDocId}/undo`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json();
+      if (res.status !== 400) alert(`Undo failed: ${err.detail || res.statusText}`);
+      return;
+    }
+    const data = await res.json();
+    updateUndoRedoState(data.can_undo, data.can_redo);
+    await refreshLines();
+  } catch (e) {
+    alert('Undo error: ' + e.message);
+  }
+}
+
+async function redoAction() {
+  if (!currentDocId) return;
+  try {
+    const res = await fetch(`${API}/documents/${currentDocId}/redo`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json();
+      if (res.status !== 400) alert(`Redo failed: ${err.detail || res.statusText}`);
+      return;
+    }
+    const data = await res.json();
+    updateUndoRedoState(data.can_undo, data.can_redo);
+    await refreshLines();
+  } catch (e) {
+    alert('Redo error: ' + e.message);
+  }
+}
+
+// Keyboard shortcuts
+document.addEventListener('keydown', (e) => {
+  if (!currentDocId) return;
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+    e.preventDefault();
+    undoAction();
+  } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+    e.preventDefault();
+    redoAction();
+  }
+});
+
+// ---- Search / Filter ----
+
+function onSearchInput() {
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(executeSearch, 250);
+}
+
+async function executeSearch() {
+  if (!currentDocId) return;
+  const q = document.getElementById('search-input').value;
+  const status = document.getElementById('status-filter').value;
+  const regex = document.getElementById('search-regex').checked;
+
+  // If both blank, just show all lines
+  if (!q && !status) {
+    document.getElementById('search-count').textContent = '';
+    renderLines(linesData);
+    return;
+  }
+
+  try {
+    const params = new URLSearchParams();
+    if (q) params.set('q', q);
+    if (regex) params.set('regex', 'true');
+    if (status) params.set('status', status);
+
+    const res = await fetch(`${API}/documents/${currentDocId}/search?${params}`);
+    if (!res.ok) {
+      const err = await res.json();
+      document.getElementById('search-count').textContent = err.detail || 'Error';
+      document.getElementById('search-count').style.color = 'var(--red)';
+      return;
+    }
+    const matches = await res.json();
+    document.getElementById('search-count').textContent = `${matches.length} of ${linesData.length} lines`;
+    document.getElementById('search-count').style.color = 'var(--subtext)';
+    renderLines(matches);
+  } catch (e) {
+    document.getElementById('search-count').textContent = 'Error: ' + e.message;
+    document.getElementById('search-count').style.color = 'var(--red)';
+  }
+}
+
+function clearSearch() {
+  document.getElementById('search-input').value = '';
+  document.getElementById('status-filter').value = '';
+  document.getElementById('search-regex').checked = false;
+  document.getElementById('search-count').textContent = '';
+}
+
 // ---- Lines Table ----
 
 async function refreshLines() {
   const res = await fetch(`${API}/documents/${currentDocId}/lines`);
   linesData = await res.json();
-  renderLines(linesData);
+  // Re-apply active search filter if any
+  const q = document.getElementById('search-input').value;
+  const status = document.getElementById('status-filter').value;
+  if (q || status) {
+    executeSearch();
+  } else {
+    renderLines(linesData);
+  }
 }
 
 function renderLines(lines) {
@@ -558,7 +764,11 @@ async function deleteLine(position) {
     if (editingPosition === position) closeEdit();
     // Adjust editing position if it was after the deleted line
     else if (editingPosition !== null && editingPosition > position) editingPosition--;
+    // Delete is a recorded mutation
+    updateUndoRedoState(true, false);
     await refreshLines();
+    // Update undo/redo state from any subsequent request
+    updateUndoRedoState(true, canRedo);
     // Update doc title line count
     const titleEl = document.getElementById('doc-title');
     titleEl.textContent = titleEl.textContent.replace(
@@ -583,6 +793,8 @@ async function insertLineAt(position) {
     }
     // Adjust editing position if it was at or after the insertion point
     if (editingPosition !== null && editingPosition >= position) editingPosition++;
+    // Insert is a recorded mutation
+    updateUndoRedoState(true, false);
     await refreshLines();
   } catch (e) {
     alert('Error: ' + e.message);
@@ -1175,6 +1387,8 @@ async function commitToDocument() {
     } else {
       showResult(`Committed with errors: ${msgs.join('; ')}`, false);
     }
+    // Commit is a recorded mutation — undo is now available
+    updateUndoRedoState(true, false);
     await refreshLines();
   } catch (e) {
     showResult('Error: ' + e.message, false);

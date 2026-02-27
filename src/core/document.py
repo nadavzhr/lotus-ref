@@ -16,12 +16,108 @@ never see UUIDs.
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from dataclasses import dataclass
+from typing import Optional, Protocol
 
 from core.document_type import DocumentType
 from core.document_line import DocumentLine
 
 logger = logging.getLogger(__name__)
+
+
+# ------------------------------------------------------------------
+# Mutation record — returned by undo() / redo() so callers can
+# synchronize external state (e.g. conflict detection) without
+# coupling to the undo internals.
+# ------------------------------------------------------------------
+
+@dataclass(frozen=True, slots=True)
+class MutationRecord:
+    """Describes a mutation that was applied to a :class:`Document`.
+
+    Attributes:
+        kind:     ``"insert"`` | ``"remove"`` | ``"replace"``
+        position: 0-based line position at the time of the mutation.
+        line_id:  Stable UUID of the affected line.
+        old_line: The line that was removed or replaced (``None`` for insert).
+        new_line: The line that was inserted or is the replacement
+                  (``None`` for remove).
+    """
+    kind: str
+    position: int
+    line_id: str
+    old_line: Optional[DocumentLine] = None
+    new_line: Optional[DocumentLine] = None
+
+
+# ------------------------------------------------------------------
+# Internal command objects (private to this module)
+# ------------------------------------------------------------------
+
+class _Command(Protocol):
+    """Reversible mutation — every command knows how to undo and redo itself."""
+    def undo(self, doc: Document) -> MutationRecord: ...
+    def redo(self, doc: Document) -> MutationRecord: ...
+
+
+class _InsertCmd:
+    """Reversible insert — undo removes the line, redo re-inserts it."""
+    __slots__ = ("_position", "_line")
+
+    def __init__(self, position: int, line: DocumentLine) -> None:
+        self._position = position
+        self._line = line
+
+    def undo(self, doc: Document) -> MutationRecord:
+        pos = doc.get_position(self._line.line_id)
+        doc._raw_remove_line(self._line.line_id)
+        return MutationRecord("remove", pos, self._line.line_id,
+                              old_line=self._line)
+
+    def redo(self, doc: Document) -> MutationRecord:
+        doc._raw_insert_line(self._position, self._line)
+        return MutationRecord("insert", self._position, self._line.line_id,
+                              new_line=self._line)
+
+
+class _RemoveCmd:
+    """Reversible remove — undo re-inserts the line, redo removes it."""
+    __slots__ = ("_position", "_line")
+
+    def __init__(self, position: int, line: DocumentLine) -> None:
+        self._position = position
+        self._line = line
+
+    def undo(self, doc: Document) -> MutationRecord:
+        doc._raw_insert_line(self._position, self._line)
+        return MutationRecord("insert", self._position, self._line.line_id,
+                              new_line=self._line)
+
+    def redo(self, doc: Document) -> MutationRecord:
+        doc._raw_remove_line(self._line.line_id)
+        return MutationRecord("remove", self._position, self._line.line_id,
+                              old_line=self._line)
+
+
+class _ReplaceCmd:
+    """Reversible replace — undo restores the old line, redo reapplies."""
+    __slots__ = ("_old_line", "_new_line")
+
+    def __init__(self, old_line: DocumentLine, new_line: DocumentLine) -> None:
+        self._old_line = old_line
+        self._new_line = new_line
+
+    def undo(self, doc: Document) -> MutationRecord:
+        pos = doc.get_position(self._new_line.line_id)
+        doc._raw_replace_line(self._new_line.line_id, self._old_line)
+        return MutationRecord("replace", pos, self._old_line.line_id,
+                              old_line=self._new_line, new_line=self._old_line)
+
+    def redo(self, doc: Document) -> MutationRecord:
+        pos = doc.get_position(self._old_line.line_id)
+        doc._raw_replace_line(self._old_line.line_id, self._new_line)
+        return MutationRecord("replace", pos, self._new_line.line_id,
+                              old_line=self._old_line, new_line=self._new_line)
 
 
 class Document:
@@ -34,7 +130,8 @@ class Document:
     existing ``DocumentLine`` do *not* need an index update.
     """
 
-    __slots__ = ("doc_type", "file_path", "_lines", "_index", "_lines_cache")
+    __slots__ = ("doc_type", "file_path", "_lines", "_index", "_lines_cache",
+                 "_undo_stack", "_redo_stack")
 
     def __init__(
         self,
@@ -47,6 +144,8 @@ class Document:
         self._lines: list[DocumentLine] = list(lines) if lines else []
         self._index: dict[str, int] = {}
         self._lines_cache: tuple[DocumentLine, ...] | None = None
+        self._undo_stack: list[_Command] = []
+        self._redo_stack: list[_Command] = []
         self._rebuild_index()
 
     # ------------------------------------------------------------------
@@ -79,53 +178,115 @@ class Document:
         return line_id in self._index
 
     # ------------------------------------------------------------------
-    # Mutations
+    # Bulk operations (no undo recording)
     # ------------------------------------------------------------------
 
     def append_line(self, line: DocumentLine) -> None:
-        """Add a line to the end of the document."""
+        """Add a line to the end.  Construction-time only — not recorded."""
         if line.line_id in self._index:
             raise ValueError(f"Duplicate line_id: {line.line_id}")
         self._lines.append(line)
         self._index[line.line_id] = len(self._lines) - 1
         self._lines_cache = None
 
+    # ------------------------------------------------------------------
+    # Mutations (recorded to undo stack)
+    # ------------------------------------------------------------------
+
     def insert_line(self, position: int, line: DocumentLine) -> None:
-        """Insert a line at the given 0-based position."""
+        """Insert *line* at *position*.  Recorded for undo."""
+        self._raw_insert_line(position, line)
+        self._undo_stack.append(_InsertCmd(position, line))
+        self._redo_stack.clear()
+
+    def remove_line(self, line_id: str) -> DocumentLine:
+        """Remove and return a line by UUID.  Recorded for undo."""
+        pos = self.get_position(line_id)
+        removed = self._raw_remove_line(line_id)
+        self._undo_stack.append(_RemoveCmd(pos, removed))
+        self._redo_stack.clear()
+        return removed
+
+    def replace_line(self, line_id: str, new_line: DocumentLine) -> None:
+        """Replace a line in-place.  Recorded for undo."""
+        old_line = self.get_line(line_id)
+        self._raw_replace_line(line_id, new_line)
+        self._undo_stack.append(_ReplaceCmd(old_line, new_line))
+        self._redo_stack.clear()
+
+    # ------------------------------------------------------------------
+    # Undo / Redo
+    # ------------------------------------------------------------------
+
+    @property
+    def can_undo(self) -> bool:
+        """``True`` if there is at least one operation to undo."""
+        return bool(self._undo_stack)
+
+    @property
+    def can_redo(self) -> bool:
+        """``True`` if there is at least one operation to redo."""
+        return bool(self._redo_stack)
+
+    def undo(self) -> MutationRecord | None:
+        """Undo the most recent mutation.
+
+        Returns a :class:`MutationRecord` describing the *applied*
+        reversal (e.g. undoing an insert returns a ``"remove"`` record),
+        or ``None`` if the undo stack is empty.
+        """
+        if not self._undo_stack:
+            return None
+        cmd = self._undo_stack.pop()
+        record = cmd.undo(self)
+        self._redo_stack.append(cmd)
+        logger.debug("Undo: %s line %s at position %d",
+                     record.kind, record.line_id, record.position)
+        return record
+
+    def redo(self) -> MutationRecord | None:
+        """Redo the most recently undone mutation.
+
+        Returns a :class:`MutationRecord` describing the *applied*
+        mutation, or ``None`` if the redo stack is empty.
+        """
+        if not self._redo_stack:
+            return None
+        cmd = self._redo_stack.pop()
+        record = cmd.redo(self)
+        self._undo_stack.append(cmd)
+        logger.debug("Redo: %s line %s at position %d",
+                     record.kind, record.line_id, record.position)
+        return record
+
+    # ------------------------------------------------------------------
+    # Raw mutations (no recording — used by command undo/redo)
+    # ------------------------------------------------------------------
+
+    def _raw_insert_line(self, position: int, line: DocumentLine) -> None:
         if line.line_id in self._index:
             raise ValueError(f"Duplicate line_id: {line.line_id}")
         self._lines.insert(position, line)
         self._lines_cache = None
-        # Shift entries at or after the insertion point up by 1
         for lid, idx in self._index.items():
             if idx >= position:
                 self._index[lid] = idx + 1
         self._index[line.line_id] = position
 
-    def remove_line(self, line_id: str) -> DocumentLine:
-        """Remove and return a line by its UUID.  Raises KeyError."""
+    def _raw_remove_line(self, line_id: str) -> DocumentLine:
         pos = self._index.pop(line_id)
         removed = self._lines.pop(pos)
         self._lines_cache = None
-        # Shift entries after the removed position down by 1
         for lid, idx in self._index.items():
             if idx > pos:
                 self._index[lid] = idx - 1
         return removed
 
-    def replace_line(self, line_id: str, new_line: DocumentLine) -> None:
-        """
-        Replace a line in-place, keeping the same position.
-
-        The new_line's ``line_id`` may differ from the old one
-        (e.g. after re-parsing an edited line).  Typically the caller
-        will reuse the same ``line_id``.
-        """
+    def _raw_replace_line(self, line_id: str, new_line: DocumentLine) -> None:
         pos = self._index.pop(line_id)
         self._lines[pos] = new_line
         self._lines_cache = None
         logger.debug("Replaced line %s at position %d", line_id, pos)
-        # If the id changed we need a full rebuild; if same, just update index
         if new_line.line_id != line_id:
             self._rebuild_index()
         else:

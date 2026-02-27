@@ -207,6 +207,32 @@ def save_doc(doc_id: str, req: SaveRequest):
 
 
 # ------------------------------------------------------------------
+# Undo / Redo
+# ------------------------------------------------------------------
+
+@router.post("/documents/{doc_id}/undo")
+def undo(doc_id: str):
+    """Undo the most recent mutation in *doc_id*."""
+    try:
+        return svc().undo(doc_id)
+    except KeyError:
+        raise HTTPException(404, f"Document not found: {doc_id}")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/documents/{doc_id}/redo")
+def redo(doc_id: str):
+    """Redo the most recently undone mutation in *doc_id*."""
+    try:
+        return svc().redo(doc_id)
+    except KeyError:
+        raise HTTPException(404, f"Document not found: {doc_id}")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+# ------------------------------------------------------------------
 # NQS Query Preview
 # ------------------------------------------------------------------
 

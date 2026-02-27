@@ -132,9 +132,10 @@ class DocumentService:
         )
         doc.replace_line(line_id, new_line)
 
-        # Full rebuild of conflict state (a single line change can
-        # create or resolve conflicts with arbitrarily many lines)
-        self._rebuild_conflicts(doc_id)
+        # Incremental conflict update — only recompute for this line
+        detector = self._conflict_detectors.get(doc_id)
+        if detector is not None:
+            detector.update_line(line_id, committed_data)
 
         pos = doc.get_position(line_id)
         detector = self._conflict_detectors.get(doc_id)
@@ -229,8 +230,10 @@ class DocumentService:
         )
         doc.replace_line(line_id, new_line)
 
-        # Full rebuild of conflict state
-        self._rebuild_conflicts(doc_id)
+        # Incremental conflict update — only recompute for this line
+        detector = self._conflict_detectors.get(doc_id)
+        if detector is not None:
+            detector.update_line(line_id, committed_data)
 
         pos = doc.get_position(line_id)
         detector = self._conflict_detectors.get(doc_id)

@@ -12,15 +12,29 @@ Canonical net IDs are integers assigned by the ConflictDetector at startup.
 String names are stored once and resolved only for UI display, keeping the
 core indexes compact and cache-friendly.
 
-ConflictDetector owns both the ID mapping and the ConflictStore.  It
-is fully rebuilt from all document lines on every edit to guarantee
-consistency — a single line change can affect arbitrarily many other
-lines, so incremental updates are not attempted.
+ConflictDetector owns both the ID mapping and the ConflictStore.
+It supports efficient incremental updates:
+
+* **Edit line X** — resolve the new nets for X and call
+  ``store.update_line(X, new_nets)``.  The store removes X from old
+  net→lines entries and adds it to the new ones.  Conflict queries
+  for *all* lines are immediately consistent because they read the
+  bidirectional index at query time.
+* **Insert new line X** — new lines are always empty, so no store
+  update is needed.
+* **Remove line X** — call ``store.remove_line(X)`` which cleans up
+  both indexes.  No full scan required.
+
+A full rebuild via :meth:`ConflictDetector.rebuild` is used only on
+initial document load to populate the store in a single batch pass.
 
 Usage::
 
     detector = ConflictDetector(nqs)
-    detector.rebuild(doc.lines)
+    detector.rebuild(doc.lines)               # initial load
+
+    detector.update_line("line-1", line_data) # after edit
+    detector.remove_line("line-1")            # after delete
 
     detector.is_conflicting("line-1")
     detector.get_conflict_info("line-1")
@@ -187,9 +201,25 @@ class ConflictDetector:
     results into integer canonical-net-ID sets and maintains the
     bidirectional index via :class:`ConflictStore`.
 
-    Conflict state is always rebuilt from scratch (via :meth:`rebuild`)
-    because a single line change can cascade into conflicts with
-    arbitrarily many other lines.
+    Incremental updates
+    -------------------
+    Because the ConflictStore maintains a bidirectional index
+    (line→nets and net→lines), a single ``store.update_line()`` call
+    is sufficient to keep *all* conflict queries consistent:
+
+    * Old net→lines entries for the edited line are removed.
+    * New net→lines entries are added.
+    * Queries like ``is_conflicting(any_line)`` read the live index
+      and immediately reflect the change — no "update both sides" loop
+      is needed.
+
+    This means:
+
+    * **Edit line X**: call ``update_line(line_id, data)`` — O(|nets_of_X|)
+    * **Insert new line X**: no-op (new lines are always empty)
+    * **Remove line X**: call ``remove_line(line_id)`` — O(|old_nets_of_X|)
+
+    A full :meth:`rebuild` is used only on initial document load.
 
     Performance
     -----------
@@ -339,16 +369,16 @@ class ConflictDetector:
         return frozenset()
 
     # ------------------------------------------------------------------
-    # Full rebuild
+    # Full rebuild (initial load only)
     # ------------------------------------------------------------------
 
     def rebuild(self, lines: list["DocumentLine"]) -> None:
         """
         Rebuild conflict state from scratch for all *lines*.
 
-        This is the **only** mutation path — no incremental updates.
-        A single line change can create or resolve conflicts with
-        arbitrarily many other lines, so we always rebuild entirely.
+        Used **only** during initial document load.  After that, the
+        incremental :meth:`update_line` and :meth:`remove_line` methods
+        keep the index consistent without scanning all lines.
 
         Uses :meth:`ConflictStore.build_from_lines` for a single-pass
         batch build (no per-line remove-from-index overhead).
@@ -360,6 +390,41 @@ class ConflictDetector:
                 if nets:
                     line_nets[line.line_id] = nets
         self._store.build_from_lines(line_nets)
+
+    # ------------------------------------------------------------------
+    # Incremental updates
+    # ------------------------------------------------------------------
+
+    def update_line(self, line_id: str, data) -> None:
+        """
+        Incrementally update conflict state after editing *line_id*.
+
+        Resolves the new canonical net IDs from *data* and updates the
+        store's bidirectional index.  Because conflict queries read the
+        live index, all ``is_conflicting`` / ``get_conflict_info`` calls
+        for **every** line immediately reflect the change.
+
+        *data* is the line's parsed data (``AfLineData`` /
+        ``MutexLineData``), or ``None`` for comment / blank lines.
+
+        Complexity: O(|old_nets| + |new_nets|) — no full scan.
+        """
+        if data is None:
+            self._store.remove_line(line_id)
+        else:
+            nets = self.resolve_line_nets(data)
+            self._store.update_line(line_id, nets)
+
+    def remove_line(self, line_id: str) -> None:
+        """
+        Remove *line_id* from the conflict index after deletion.
+
+        Cleans up both sides of the bidirectional index so that other
+        lines that previously conflicted with *line_id* are updated.
+
+        Complexity: O(|nets_of_line|) — no full scan.
+        """
+        self._store.remove_line(line_id)
 
     # ------------------------------------------------------------------
     # Query delegation to store

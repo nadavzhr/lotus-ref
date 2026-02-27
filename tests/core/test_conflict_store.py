@@ -291,3 +291,167 @@ class TestConflictDetectorRebuild:
         # L1 covers vdd, L2 covers vdd+vss → overlap on vdd
         assert det.is_conflicting("L1")
         assert det.is_conflicting("L2")
+
+
+# ===========================================================
+# ConflictDetector — incremental updates
+# ===========================================================
+
+class TestConflictDetectorUpdateLine:
+    """Tests for ConflictDetector.update_line() — the incremental edit path."""
+
+    def test_update_creates_conflict(self):
+        """Editing a line to overlap with another should create a conflict."""
+        nqs = _make_mock_nqs_for_detector()
+        det = ConflictDetector(nqs)
+
+        # Initial state: no conflict (vdd vs vss)
+        lines = [
+            _make_line("L1", AfLineData(net="vdd", af_value=0.5, is_em_enabled=True)),
+            _make_line("L2", AfLineData(net="vss", af_value=0.5, is_em_enabled=True)),
+        ]
+        det.rebuild(lines)
+        assert not det.is_conflicting("L1")
+        assert not det.is_conflicting("L2")
+
+        # Edit L2 to also cover vdd → conflict
+        new_data = AfLineData(net="vdd", af_value=0.8, is_em_enabled=True)
+        det.update_line("L2", new_data)
+
+        assert det.is_conflicting("L1")
+        assert det.is_conflicting("L2")
+        assert det.get_conflicting_lines("L1") == {"L2"}
+        assert det.get_conflicting_lines("L2") == {"L1"}
+
+    def test_update_resolves_conflict(self):
+        """Editing a line away from a shared net should resolve the conflict."""
+        nqs = _make_mock_nqs_for_detector()
+        det = ConflictDetector(nqs)
+
+        # Initial state: conflict (both on vdd)
+        lines = [
+            _make_line("L1", AfLineData(net="vdd", af_value=0.5, is_em_enabled=True)),
+            _make_line("L2", AfLineData(net="vdd", af_value=0.8, is_em_enabled=True)),
+        ]
+        det.rebuild(lines)
+        assert det.is_conflicting("L1")
+
+        # Edit L2 to vss → conflict resolved
+        new_data = AfLineData(net="vss", af_value=0.8, is_em_enabled=True)
+        det.update_line("L2", new_data)
+
+        assert not det.is_conflicting("L1")
+        assert not det.is_conflicting("L2")
+
+    def test_update_with_none_removes_from_conflicts(self):
+        """Setting data to None (comment/blank) should remove from conflicts."""
+        nqs = _make_mock_nqs_for_detector()
+        det = ConflictDetector(nqs)
+
+        lines = [
+            _make_line("L1", AfLineData(net="vdd", af_value=0.5, is_em_enabled=True)),
+            _make_line("L2", AfLineData(net="vdd", af_value=0.8, is_em_enabled=True)),
+        ]
+        det.rebuild(lines)
+        assert det.is_conflicting("L1")
+
+        # L2 becomes a comment
+        det.update_line("L2", None)
+
+        assert not det.is_conflicting("L1")
+        assert not det.is_conflicting("L2")
+
+    def test_update_affects_all_peers(self):
+        """When line X is edited, all peers' conflict status should update."""
+        nqs = _make_mock_nqs_for_detector()
+        det = ConflictDetector(nqs)
+
+        # Three lines on vdd
+        lines = [
+            _make_line("L1", AfLineData(net="vdd", af_value=0.5, is_em_enabled=True)),
+            _make_line("L2", AfLineData(net="vdd", af_value=0.8, is_em_enabled=True)),
+            _make_line("L3", AfLineData(net="vdd", af_value=0.3, is_em_enabled=True)),
+        ]
+        det.rebuild(lines)
+        assert det.get_conflicting_lines("L1") == {"L2", "L3"}
+
+        # Remove L3 from vdd
+        det.update_line("L3", AfLineData(net="vss", af_value=0.3, is_em_enabled=True))
+
+        # L1 and L2 still conflict with each other, but L3 is gone
+        assert det.is_conflicting("L1")
+        assert det.get_conflicting_lines("L1") == {"L2"}
+        assert not det.is_conflicting("L3")
+
+    def test_update_previously_no_conflict_creates_multi_conflict(self):
+        """
+        A single edit to a previously-non-conflicting line can create
+        conflicts with many other lines simultaneously.
+        """
+        nqs = _make_mock_nqs_for_detector()
+        det = ConflictDetector(nqs)
+
+        # L1, L2, L3 all on vdd; L4 on vss (no conflict with L4)
+        lines = [
+            _make_line("L1", AfLineData(net="vdd", af_value=0.5, is_em_enabled=True)),
+            _make_line("L2", AfLineData(net="vdd", af_value=0.8, is_em_enabled=True)),
+            _make_line("L3", AfLineData(net="vdd", af_value=0.3, is_em_enabled=True)),
+            _make_line("L4", AfLineData(net="vss", af_value=0.5, is_em_enabled=True)),
+        ]
+        det.rebuild(lines)
+        assert not det.is_conflicting("L4")
+
+        # Edit L4 to vdd → now conflicts with L1, L2, L3
+        det.update_line("L4", AfLineData(net="vdd", af_value=0.5, is_em_enabled=True))
+
+        assert det.is_conflicting("L4")
+        assert det.get_conflicting_lines("L4") == {"L1", "L2", "L3"}
+        # All original vdd lines should now also show L4 as a peer
+        assert "L4" in det.get_conflicting_lines("L1")
+        assert "L4" in det.get_conflicting_lines("L2")
+        assert "L4" in det.get_conflicting_lines("L3")
+
+
+class TestConflictDetectorRemoveLine:
+    """Tests for ConflictDetector.remove_line() — the line deletion path."""
+
+    def test_remove_resolves_conflict(self):
+        nqs = _make_mock_nqs_for_detector()
+        det = ConflictDetector(nqs)
+
+        lines = [
+            _make_line("L1", AfLineData(net="vdd", af_value=0.5, is_em_enabled=True)),
+            _make_line("L2", AfLineData(net="vdd", af_value=0.8, is_em_enabled=True)),
+        ]
+        det.rebuild(lines)
+        assert det.is_conflicting("L1")
+
+        det.remove_line("L2")
+
+        assert not det.is_conflicting("L1")
+        assert det.get_conflict_info("L2") is None
+
+    def test_remove_nonexistent_is_safe(self):
+        nqs = _make_mock_nqs_for_detector()
+        det = ConflictDetector(nqs)
+        det.remove_line("nonexistent")  # should not raise
+
+    def test_remove_preserves_other_conflicts(self):
+        """Removing one line from a 3-way conflict leaves the other two conflicting."""
+        nqs = _make_mock_nqs_for_detector()
+        det = ConflictDetector(nqs)
+
+        lines = [
+            _make_line("L1", AfLineData(net="vdd", af_value=0.5, is_em_enabled=True)),
+            _make_line("L2", AfLineData(net="vdd", af_value=0.8, is_em_enabled=True)),
+            _make_line("L3", AfLineData(net="vdd", af_value=0.3, is_em_enabled=True)),
+        ]
+        det.rebuild(lines)
+        assert det.get_conflicting_lines("L1") == {"L2", "L3"}
+
+        det.remove_line("L3")
+
+        assert det.is_conflicting("L1")
+        assert det.get_conflicting_lines("L1") == {"L2"}
+        assert det.is_conflicting("L2")
+        assert det.get_conflicting_lines("L2") == {"L1"}

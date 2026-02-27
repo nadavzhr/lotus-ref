@@ -29,9 +29,11 @@ export function LayoutC() {
   const [explorerCollapsed, setExplorerCollapsed] = useState(false)
 
   // Left-center horizontal split (explorer | editor)
-  const hSplit = useSplitter(25, "horizontal", 15, 45)
+  const hContainerRef = useRef<HTMLDivElement>(null)
+  const hSplit = useSplitter(25, "horizontal", hContainerRef, 15, 45)
   // Center-right horizontal split (editor | right pane)
-  const rSplit = useSplitter(65, "horizontal", 40, 85)
+  const rContainerRef = useRef<HTMLDivElement>(null)
+  const rSplit = useSplitter(65, "horizontal", rContainerRef, 40, 85)
   // Vertical split (main | bottom)
   const [bottomHeight, setBottomHeight] = useState(160)
   const [bottomCollapsed, setBottomCollapsed] = useState(false)
@@ -97,7 +99,7 @@ export function LayoutC() {
       {/* Main Area */}
       <div className="flex-1 min-h-0 flex flex-col">
         {/* Upper workspace */}
-        <div className="flex-1 min-h-0 flex flex-row" ref={hSplit.containerRef}>
+        <div className="flex-1 min-h-0 flex flex-row" ref={hContainerRef}>
           {/* Left: Explorer / Line List */}
           {!explorerCollapsed && (
             <>
@@ -155,7 +157,7 @@ export function LayoutC() {
           )}
 
           {/* Center + Right split */}
-          <div className="flex-1 min-w-0 flex flex-row h-full" ref={rSplit.containerRef}>
+          <div className="flex-1 min-w-0 flex flex-row h-full" ref={rContainerRef}>
             {/* Center: Editor */}
             <div className="h-full overflow-hidden flex flex-col" style={{ width: `${rSplit.pct}%` }}>
               <div className="flex items-center px-2 py-1 border-b bg-muted/20 shrink-0 gap-2">

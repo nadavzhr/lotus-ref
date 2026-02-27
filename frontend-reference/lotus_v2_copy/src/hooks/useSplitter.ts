@@ -1,22 +1,21 @@
-import { useState, useRef, useCallback } from "react"
+import { useState, useCallback, type RefObject } from "react"
 
 export function useSplitter(
   initial: number,
   direction: "horizontal" | "vertical",
+  containerRef: RefObject<HTMLDivElement | null>,
   min = 15,
   max = 85,
 ) {
   const [pct, setPct] = useState(initial)
-  const dragging = useRef(false)
-  const containerRef = useRef<HTMLDivElement>(null)
 
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault()
-      dragging.current = true
+      let isDragging = true
 
       const onMouseMove = (ev: MouseEvent) => {
-        if (!dragging.current || !containerRef.current) return
+        if (!isDragging || !containerRef.current) return
         const rect = containerRef.current.getBoundingClientRect()
         let ratio: number
         if (direction === "horizontal") {
@@ -28,7 +27,7 @@ export function useSplitter(
       }
 
       const onMouseUp = () => {
-        dragging.current = false
+        isDragging = false
         document.removeEventListener("mousemove", onMouseMove)
         document.removeEventListener("mouseup", onMouseUp)
         document.body.style.cursor = ""
@@ -40,8 +39,8 @@ export function useSplitter(
       document.addEventListener("mousemove", onMouseMove)
       document.addEventListener("mouseup", onMouseUp)
     },
-    [direction, min, max],
+    [direction, min, max, containerRef],
   )
 
-  return { pct, containerRef, onMouseDown }
+  return { pct, onMouseDown }
 }

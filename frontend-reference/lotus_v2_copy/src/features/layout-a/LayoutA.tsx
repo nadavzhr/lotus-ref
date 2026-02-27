@@ -29,7 +29,8 @@ export function LayoutA() {
   const [activePage, setActivePage] = useState<SidebarPage>("files")
   const [bottomCollapsed, setBottomCollapsed] = useState(false)
   const [bottomHeight, setBottomHeight] = useState(180)
-  const hSplit = useSplitter(40, "horizontal", 20, 70)
+  const hContainerRef = useRef<HTMLDivElement>(null)
+  const hSplit = useSplitter(40, "horizontal", hContainerRef, 20, 70)
 
   const dragging = useRef(false)
   const didDrag = useRef(false)
@@ -168,7 +169,7 @@ export function LayoutA() {
               ) : null}
 
               {/* Line List + Edit Panel */}
-              <div className="flex-1 min-w-0 flex flex-row h-full" ref={hSplit.containerRef}>
+              <div className="flex-1 min-w-0 flex flex-row h-full" ref={hContainerRef}>
                 {activePage === "files" && (
                   <>
                     <div className="h-full overflow-hidden border-r" style={{ width: `${hSplit.pct}%` }}>

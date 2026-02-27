@@ -138,7 +138,6 @@ class DocumentService:
             detector.update_line(line_id, committed_data)
 
         pos = doc.get_position(line_id)
-        detector = self._conflict_detectors.get(doc_id)
         return self._serialize_line(pos, new_line, detector)
 
     # ------------------------------------------------------------------
@@ -236,7 +235,6 @@ class DocumentService:
             detector.update_line(line_id, committed_data)
 
         pos = doc.get_position(line_id)
-        detector = self._conflict_detectors.get(doc_id)
         return self._serialize_line(pos, new_line, detector)
 
     # ------------------------------------------------------------------

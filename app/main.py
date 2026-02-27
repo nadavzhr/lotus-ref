@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sys
 import os
+import logging
 
 # Ensure bg-refactor/src is on sys.path so absolute imports work
 _project_root = os.path.dirname(os.path.dirname(__file__))
@@ -22,14 +23,12 @@ from app.routes import router, init_service
 
 app = FastAPI(title="DCFG Editor Prototype")
 
-from nqs.spice_nqs import SpiceNetlistQueryService  # noqa — src/nqs/
+from nqs.netlist_query_service import NetlistQueryService
+from nqs.netlist_parser.NetlistBuilder import NetlistBuilder
 _spice_file = os.path.join(_project_root, "data", "spice", "mycell.sp")
-nqs = SpiceNetlistQueryService(cell="mycell", spice_file=_spice_file)
+nqs = NetlistQueryService(cell="mycell", spice_file=_spice_file, netlist=NetlistBuilder(logger=logging.getLogger(__name__)))
 
-_spice_file_2 = os.path.join(_project_root, "tmp", "ip78d6hcf2sr4096x135m4i2k4w8r2lya", "spice", "ip78d6hcf2sr4096x135m4i2k4w8r2lya.sp")
-nqs2 = SpiceNetlistQueryService(cell="ip78d6hcf2sr4096x135m4i2k4w8r2lya", spice_file=_spice_file_2)
-
-init_service(DocumentService(nqs=nqs2))
+init_service(DocumentService(nqs=nqs))
 
 # API routes
 app.include_router(router)

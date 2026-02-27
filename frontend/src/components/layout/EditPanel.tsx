@@ -151,9 +151,9 @@ interface AFEditFormProps {
 }
 
 function AFEditForm({ data, onFieldChange }: AFEditFormProps) {
-  const af = typeof data.activity_factor === "number" ? data.activity_factor : 0
-  const em = !!data.em
-  const sh = !!data.sh
+  const af = typeof data.af_value === "number" ? data.af_value : 0
+  const em = !!data.is_em_enabled
+  const sh = !!data.is_sh_enabled
 
   return (
     <div className="p-4 space-y-4">
@@ -170,7 +170,7 @@ function AFEditForm({ data, onFieldChange }: AFEditFormProps) {
             placeholder="0.0 – 1.0"
             className="h-8 text-xs font-mono w-28"
             value={String(af)}
-            onChange={(e) => onFieldChange({ ...data, activity_factor: parseFloat(e.target.value) || 0 })}
+            onChange={(e) => onFieldChange({ ...data, af_value: parseFloat(e.target.value) || 0 })}
           />
         </div>
         <div className="flex gap-2">
@@ -178,7 +178,7 @@ function AFEditForm({ data, onFieldChange }: AFEditFormProps) {
             variant={em ? "default" : "outline"}
             size="sm"
             className="h-8 text-xs gap-1.5"
-            onClick={() => onFieldChange({ ...data, em: !em })}
+            onClick={() => onFieldChange({ ...data, is_em_enabled: !em })}
           >
             <ToggleLeft className="h-3.5 w-3.5" /> EM
           </Button>
@@ -186,7 +186,7 @@ function AFEditForm({ data, onFieldChange }: AFEditFormProps) {
             variant={sh ? "default" : "outline"}
             size="sm"
             className="h-8 text-xs gap-1.5"
-            onClick={() => onFieldChange({ ...data, sh: !sh })}
+            onClick={() => onFieldChange({ ...data, is_sh_enabled: !sh })}
           >
             <ToggleLeft className="h-3.5 w-3.5" /> SH
           </Button>

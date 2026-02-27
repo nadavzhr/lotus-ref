@@ -241,7 +241,7 @@ class TestCanonicalIdTable:
         assert nqs.canonical_net_name(nid) == "in1"
 
     def test_canonical_net_name_unknown(self, nqs):
-        assert nqs.canonical_net_name(999999) is None
+        assert nqs.canonical_net_name(-1) is None
 
 
 class TestInstancePaths:

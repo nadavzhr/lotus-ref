@@ -329,9 +329,9 @@ class Document:
         self._lines_cache = None
         logger.debug("Replaced line %s at position %d", line_id, pos)
         if new_line.line_id != line_id:
-            self._rebuild_index()
-        else:
             self._index[new_line.line_id] = pos
+        else:
+            self._index[line_id] = pos
 
     def _raw_swap_lines(self, pos_a: int, pos_b: int) -> None:
         """Swap two lines by position without recording to undo."""

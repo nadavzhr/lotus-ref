@@ -109,8 +109,8 @@ class MutexEditSessionState:
 
         if self.template is not None and entry.template_name != self.template:
             raise TemplateMismatchError(
-                f"Entry {entry} has template {entry.template_name} "
-                f"which does not match session template {self.template}."
+                f"Entry {entry} has template {entry.template_name!r} "
+                f"which does not match session template {self.template!r}."
             )
 
         if not self._loading and not entry.matches:

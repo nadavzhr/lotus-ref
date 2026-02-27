@@ -1,6 +1,10 @@
 # tmp
 tmp/
 
+# Node
+node_modules/
+dist/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -18,6 +22,7 @@ downloads/
 eggs/
 .eggs/
 lib/
+!**/src/lib/
 lib64/
 parts/
 sdist/

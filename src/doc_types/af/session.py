@@ -4,7 +4,7 @@ from typing import Optional
 from doc_types.af.line_data import AfLineData
 from core.validation_result import ValidationResult
 from core.interfaces import IEditSessionState
-from doc_types.af.validator import validate_af
+from doc_types.af.validator import validate
 
 
 @dataclass(slots=True)
@@ -36,4 +36,11 @@ class AFEditSessionState(IEditSessionState):
         NQS-aware validation (Layer 3) runs via the controller's
         ``validate()`` method, which passes the service explicitly.
         """
-        return validate_af(self.to_line_data())
+        # Af value must be between 0 and 1
+        if not (0.0 <= self.af_value <= 1.0):
+            return ValidationResult(errors=["AF value must be between 0 and 1."])
+        if not self.em_enabled and not self.sh_enabled:
+            return ValidationResult(errors=["At least one of EM mode or SH mode must be enabled."])
+        if not self.net_name:
+            return ValidationResult(errors=["Net name cannot be empty."])
+        return ValidationResult(errors=[])

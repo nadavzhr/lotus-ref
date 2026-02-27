@@ -25,8 +25,15 @@ app = FastAPI(title="DCFG Editor Prototype")
 
 from nqs.netlist_query_service import NetlistQueryService
 from nqs.netlist_parser.NetlistBuilder import NetlistBuilder
-_spice_file = os.path.join(_project_root, "data", "spice", "mycell.sp")
-nqs = NetlistQueryService(cell="mycell", spice_file=_spice_file, netlist=NetlistBuilder(logger=logging.getLogger(__name__)))
+
+cell = "mycell"
+_spice_file = os.path.join(_project_root, "data", "spice", f"{cell}.sp")
+nqs = NetlistQueryService(cell=cell, spice_file=_spice_file, netlist=NetlistBuilder(logger=logging.getLogger(__name__)))
+
+# cell = "ip78d6hcf2sr4096x135m4i2k4w8r2lya"
+
+# _spice_file2 = os.path.join(_project_root, "tmp", f"{cell}", "spice", f"{cell}.sp")
+# nqs = NetlistQueryService(cell=cell, spice_file=_spice_file2, netlist=NetlistBuilder(logger=logging.getLogger(__name__)))
 
 init_service(DocumentService(nqs=nqs))
 

@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from core.interfaces import INetlistQueryService
 
 
-def validate_af(
+def validate(
     data: AfLineData,
     nqs: Optional["INetlistQueryService"] = None,
 ) -> ValidationResult:

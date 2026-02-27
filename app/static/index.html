@@ -413,7 +413,7 @@
 const API = '/api';
 let currentDocId = null;
 let currentDocType = null;
-let editingLineId = null;
+let editingPosition = null;
 let editingLineData = null;
 let linesData = [];
 let mutexSession = null;
@@ -494,9 +494,6 @@ async function refreshLines() {
 
 function renderLines(lines) {
   const tbody = document.getElementById('lines-body');
-  // Build a position lookup for conflict display
-  const posById = {};
-  lines.forEach(l => { posById[l.line_id] = l.position + 1; });
 
   tbody.innerHTML = lines.map(line => {
     const msgs = [
@@ -506,15 +503,15 @@ function renderLines(lines) {
 
     // Show conflict info if present
     if (line.conflict_info) {
-      const otherLines = line.conflict_info.conflicting_line_ids
-        .map(id => '#' + (posById[id] || '?'))
+      const otherLines = line.conflict_info.conflicting_positions
+        .map(p => '#' + (p + 1))
         .join(', ');
       const nets = line.conflict_info.shared_nets.join(', ');
-      msgs.push(`<span style="color:var(--purple)">⚡ Conflicts with line${line.conflict_info.conflicting_line_ids.length > 1 ? 's' : ''} ${esc(otherLines)} (shared: ${esc(nets)})</span>`);
+      msgs.push(`<span style="color:var(--purple)">⚡ Conflicts with line${line.conflict_info.conflicting_positions.length > 1 ? 's' : ''} ${esc(otherLines)} (shared: ${esc(nets)})</span>`);
     }
 
     const editBtn = line.has_data
-      ? `<button class="edit-btn" onclick="startEdit('${line.line_id}', ${line.position})">Edit</button>`
+      ? `<button class="edit-btn" onclick="startEdit(${line.position})">Edit</button>`
       : '';
 
     return `<tr class="status-${line.status}">
@@ -529,14 +526,14 @@ function renderLines(lines) {
 
 // ---- Edit Flow ----
 
-async function startEdit(lineId, position) {
+async function startEdit(position) {
   try {
-    const res = await fetch(`${API}/documents/${currentDocId}/lines/${lineId}/edit`, {
+    const res = await fetch(`${API}/documents/${currentDocId}/lines/${position}/edit`, {
       method: 'POST'
     });
     if (!res.ok) return alert('Failed to start edit');
     const result = await res.json();
-    editingLineId = lineId;
+    editingPosition = position;
     editingLineData = result.data;
 
     document.getElementById('edit-line-num').textContent = `#${position + 1}`;
@@ -781,7 +778,7 @@ async function mutexAddNetActive(netName) {
 async function mutexAddMutexed(template, netPattern, isRegex) {
   try {
     const res = await fetch(
-      `${API}/documents/${currentDocId}/lines/${editingLineId}/mutex/add-mutexed`,
+      `${API}/documents/${currentDocId}/lines/${editingPosition}/mutex/add-mutexed`,
       {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -804,7 +801,7 @@ async function mutexAddMutexed(template, netPattern, isRegex) {
 async function mutexAddActive(template, netName) {
   try {
     const res = await fetch(
-      `${API}/documents/${currentDocId}/lines/${editingLineId}/mutex/add-active`,
+      `${API}/documents/${currentDocId}/lines/${editingPosition}/mutex/add-active`,
       {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -827,7 +824,7 @@ async function mutexAddActive(template, netName) {
 async function mutexRemoveMutexed(template, netPattern, isRegex) {
   try {
     const res = await fetch(
-      `${API}/documents/${currentDocId}/lines/${editingLineId}/mutex/remove-mutexed`,
+      `${API}/documents/${currentDocId}/lines/${editingPosition}/mutex/remove-mutexed`,
       {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -850,7 +847,7 @@ async function mutexRemoveMutexed(template, netPattern, isRegex) {
 async function mutexRemoveActive(template, netName) {
   try {
     const res = await fetch(
-      `${API}/documents/${currentDocId}/lines/${editingLineId}/mutex/remove-active`,
+      `${API}/documents/${currentDocId}/lines/${editingPosition}/mutex/remove-active`,
       {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -875,7 +872,7 @@ async function mutexSetNumActive(value) {
   if (isNaN(val)) return;
   try {
     const res = await fetch(
-      `${API}/documents/${currentDocId}/lines/${editingLineId}/mutex/set-num-active`,
+      `${API}/documents/${currentDocId}/lines/${editingPosition}/mutex/set-num-active`,
       {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -898,7 +895,7 @@ async function mutexSetFev() {
   const fev = document.getElementById('f-fev').value;
   try {
     const res = await fetch(
-      `${API}/documents/${currentDocId}/lines/${editingLineId}/mutex/set-fev`,
+      `${API}/documents/${currentDocId}/lines/${editingPosition}/mutex/set-fev`,
       {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -924,7 +921,7 @@ async function mutexSetFev() {
 async function refreshMutexSession() {
   try {
     const res = await fetch(
-      `${API}/documents/${currentDocId}/lines/${editingLineId}/mutex/session`
+      `${API}/documents/${currentDocId}/lines/${editingPosition}/mutex/session`
     );
     if (res.ok) {
       mutexSession = await res.json();
@@ -966,15 +963,15 @@ function renderMutexSession(session) {
     } else {
       mutexedList.innerHTML = session.mutexed_entries.map(e => {
         const isActive = activeNames.has(e.net_name);
-        const matchInfo = e.matches.length > 0
-          ? `<span class="net-meta">${e.matches.length} match${e.matches.length !== 1 ? 'es' : ''}</span>`
+        const matchInfo = e.match_count > 0
+          ? `<span class="net-meta">${e.match_count} match${e.match_count !== 1 ? 'es' : ''}</span>`
           : '<span class="net-meta" style="color:var(--red)">no matches</span>';
         const regexBadge = e.regex_mode
           ? '<span class="net-meta" style="color:var(--peach)">regex</span>'
           : '';
 
         // Promote-to-active button: only for non-regex, single-match entries not already active
-        const canPromote = !e.regex_mode && e.matches.length === 1 && !isActive;
+        const canPromote = !e.regex_mode && e.match_count === 1 && !isActive;
         const promoteBtn = canPromote
           ? `<button class="small-btn teal-btn" onclick="mutexAddActive(${jsArg(e.template_name)},'${jsStr(e.net_name)}')" title="Promote to Active">→A</button>`
           : '';
@@ -1002,7 +999,7 @@ function renderMutexSession(session) {
         const removeBtn = `<button class="small-btn danger-btn" onclick="mutexRemoveActive(${jsArg(e.template_name)},'${jsStr(e.net_name)}')" title="Remove from Active">×</button>`;
         return `<div class="entry-item entry-item-active">
           <span class="net-name">${esc(e.net_name)}</span>
-          <span class="net-meta">${e.matches.length} match</span>
+          <span class="net-meta">${e.match_count} match</span>
           <span class="entry-actions">${removeBtn}</span>
         </div>`;
       }).join('');
@@ -1033,28 +1030,7 @@ function normalizeTemplateInput(template) {
 // ==================================================================
 
 async function commitMutex() {
-  try {
-    const res = await fetch(
-      `${API}/documents/${currentDocId}/lines/${editingLineId}/mutex/commit`,
-      { method: 'POST' }
-    );
-    const data = await res.json();
-    if (!res.ok) {
-      showResult(`Commit failed: ${data.detail}`, false);
-      return;
-    }
-    const msgs = [...(data.errors || []), ...(data.warnings || [])];
-    if (data.status === 'ok') {
-      showResult('✓ Committed — line is OK', true);
-    } else if (data.status === 'warning') {
-      showResult(`✓ Committed with warnings: ${msgs.join('; ')}`, true);
-    } else {
-      showResult(`X Error: ${msgs.join('; ')}`, false);
-    }
-    await refreshLines();
-  } catch (e) {
-    showResult('Error: ' + e.message, false);
-  }
+  await commitToDocument();
 }
 
 // ==================================================================
@@ -1091,33 +1067,56 @@ function gatherFields() {
 async function submitEdit() {
   const fields = gatherFields();
   try {
-    const res = await fetch(`${API}/documents/${currentDocId}/lines/${editingLineId}`, {
-      method: 'PUT',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ fields })
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      showResult(`Error: ${data.detail || JSON.stringify(data)}`, false);
+    // Step 1: update session with gathered fields
+    const updateRes = await fetch(
+      `${API}/documents/${currentDocId}/lines/${editingPosition}/session`,
+      {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ fields })
+      }
+    );
+    if (!updateRes.ok) {
+      const err = await updateRes.json();
+      showResult(`Error: ${err.detail || JSON.stringify(err)}`, false);
       return;
     }
-    const msgs = [...data.errors, ...data.warnings];
-    if (data.status === 'ok') {
-      showResult('✓ Applied — line is OK', true);
-    } else if (data.status === 'warning') {
-      showResult(`✓ Applied with warnings: ${msgs.join('; ')}`, true);
-    } else {
-      showResult(`Applied but has errors: ${msgs.join('; ')}`, false);
-    }
-    await refreshLines();
+    // Step 2: commit session to document
+    await commitToDocument();
   } catch (e) {
     showResult('Request failed: ' + e.message, false);
   }
 }
 
+/** Commit the current edit session to the document (any doc type). */
+async function commitToDocument() {
+  try {
+    const res = await fetch(
+      `${API}/documents/${currentDocId}/lines/${editingPosition}/commit`,
+      { method: 'POST' }
+    );
+    const data = await res.json();
+    if (!res.ok) {
+      showResult(`Commit failed: ${data.detail || JSON.stringify(data)}`, false);
+      return;
+    }
+    const msgs = [...(data.errors || []), ...(data.warnings || [])];
+    if (data.status === 'ok') {
+      showResult('✓ Committed — line is OK', true);
+    } else if (data.status === 'warning') {
+      showResult(`✓ Committed with warnings: ${msgs.join('; ')}`, true);
+    } else {
+      showResult(`Committed with errors: ${msgs.join('; ')}`, false);
+    }
+    await refreshLines();
+  } catch (e) {
+    showResult('Error: ' + e.message, false);
+  }
+}
+
 function closeEdit() {
   document.getElementById('edit-panel').classList.remove('open');
-  editingLineId = null;
+  editingPosition = null;
   editingLineData = null;
   mutexSession = null;
 }

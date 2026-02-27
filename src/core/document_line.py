@@ -1,10 +1,9 @@
 """
 DocumentLine — the unit of display for any configuration document.
 
-Each line in a file becomes one DocumentLine. The frontend uses
-``line_id`` (a stable UUID) to reference lines across API calls,
-and ``status`` (derived from ``validation_result``) to decide how
-to color / decorate them.
+Each line in a file becomes one DocumentLine.  The frontend addresses
+lines by their 0-based position; ``line_id`` is an internal stable UUID
+used only within the backend (e.g. for conflict detection indexes).
 """
 from __future__ import annotations
 
@@ -32,8 +31,9 @@ class DocumentLine:
     Immutable-ish representation of one line in a document.
 
     Attributes:
-        line_id:           Stable UUID — the **only** identifier the frontend
-                           should use when sending API requests.
+        line_id:           Internal stable UUID used by the backend for
+                           conflict-detection indexes and the ``Document``
+                           index.  Never exposed to the frontend.
         raw_text:          Original text that was read from the file (preserved
                            for comments, blanks, and unparseable lines).
         data:              Parsed typed data object. ``None`` for non-data lines.

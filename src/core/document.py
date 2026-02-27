@@ -8,17 +8,17 @@ file.  It is the source of truth for:
 - The edit services      → read a line (by id) into a controller, write it back
 - The persistence layer  → serialize all lines back to disk
 
-Lines are addressed by stable UUID (``line_id``), never by index.
+Lines are addressed by stable UUID (``line_id``) internally for O(1)
+lookups and conflict tracking.  The API layer resolves 0-based positions
+to ``line_id`` at the service boundary, so callers outside the backend
+never see UUIDs.
 """
 from __future__ import annotations
 
-from typing import Optional, TYPE_CHECKING
+from typing import Optional
 
 from core.document_type import DocumentType
 from core.document_line import DocumentLine
-
-if TYPE_CHECKING:
-    pass  # reserved for future type-only imports
 
 
 class Document:

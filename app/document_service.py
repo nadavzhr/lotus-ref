@@ -4,7 +4,10 @@ DocumentService — the bridge between the API layer and the core domain.
 Manages:
 - Loaded documents (keyed by a doc_id string)
 - A controller registry (one per DocumentType)
-- Edit lifecycle: load → get lines → start edit → apply → save
+- Edit lifecycle: start_edit → update_session / mutate → commit_edit
+
+The API layer addresses lines by 0-based position; the service resolves
+positions to internal line_ids which are never exposed to the frontend.
 """
 from __future__ import annotations
 
@@ -61,26 +64,26 @@ class DocumentService:
         """Return all lines in a document as JSON-friendly dicts."""
         doc = self._documents[doc_id]
         detector = self._conflict_detectors.get(doc_id)
-        return [self._serialize_line(i, line, detector) for i, line in enumerate(doc.lines)]
+        return [self._serialize_line(i, line, detector, doc) for i, line in enumerate(doc.lines)]
 
-    def get_line(self, doc_id: str, line_id: str) -> dict:
+    def get_line(self, doc_id: str, position: int) -> dict:
         doc = self._documents[doc_id]
-        line = doc.get_line(line_id)
-        pos = doc.get_position(line_id)
+        line = doc[position]
         detector = self._conflict_detectors.get(doc_id)
-        return self._serialize_line(pos, line, detector)
+        return self._serialize_line(position, line, detector, doc)
 
     # ------------------------------------------------------------------
     # Edit flow
     # ------------------------------------------------------------------
 
-    def start_edit(self, doc_id: str, line_id: str) -> dict:
+    def start_edit(self, doc_id: str, position: int) -> dict:
         """
         Begin editing a line: start a controller session, hydrate from
         existing data, return the editable fields as JSON.
         """
         doc = self._documents[doc_id]
-        line = doc.get_line(line_id)
+        line = doc[position]
+        line_id = line.line_id
         ctrl = self._controllers[doc.doc_type]
 
         ctrl.start_session(line_id)
@@ -90,27 +93,45 @@ class DocumentService:
 
         line_data = ctrl.to_line_data()
         return {
-            "line_id": line_id,
+            "position": position,
             "doc_type": doc.doc_type.value,
             "data": dataclasses.asdict(line_data),
         }
 
-    def apply_edit(self, doc_id: str, line_id: str, fields: dict) -> dict:
+    def update_session(self, doc_id: str, position: int, fields: dict) -> dict:
         """
-        Apply edited fields: hydrate controller from the incoming dict,
-        validate, and update the document line in-place.
+        Update the active edit session with new field values.
 
-        Returns the updated line (with new validation status).
+        Works for any document type: builds typed LineData from the
+        incoming dict and hydrates the controller.  Does **not** commit
+        to the document — call :meth:`commit_edit` for that.
         """
         doc = self._documents[doc_id]
+        line = doc[position]
         ctrl = self._controllers[doc.doc_type]
 
-        # Ensure session is for this line
-        ctrl.start_session(line_id)
+        ctrl.start_session(line.line_id)
 
-        # Build typed LineData from the incoming dict
         line_data = self._dict_to_line_data(doc.doc_type, fields)
         ctrl.from_line_data(line_data)
+
+        current_data = ctrl.to_line_data()
+        return {
+            "position": position,
+            "doc_type": doc.doc_type.value,
+            "data": dataclasses.asdict(current_data),
+        }
+
+    def commit_edit(self, doc_id: str, position: int) -> dict:
+        """
+        Commit the current edit session to the document.
+
+        Type-agnostic — validates the controller state, serializes to
+        raw text, replaces the line, and updates conflict detection.
+        """
+        doc = self._documents[doc_id]
+        line_id = doc[position].line_id
+        ctrl = self._controllers[doc.doc_type]
 
         # Validate via the controller (includes NQS warnings)
         vr = ctrl.validate()
@@ -118,7 +139,7 @@ class DocumentService:
         # Get the serialised data back from the controller
         committed_data = ctrl.to_line_data()
 
-        # Rebuild the line
+        # Serialize to raw text
         if doc.doc_type == DocumentType.AF:
             raw = af_serializer.serialize(committed_data)
         else:
@@ -137,8 +158,7 @@ class DocumentService:
         if detector is not None:
             detector.update_line(line_id, committed_data)
 
-        pos = doc.get_position(line_id)
-        return self._serialize_line(pos, new_line, detector)
+        return self._serialize_line(position, new_line, detector, doc)
 
     # ------------------------------------------------------------------
     # Save
@@ -166,76 +186,47 @@ class DocumentService:
     # Mutex interactive session
     # ------------------------------------------------------------------
 
-    def mutex_add_mutexed(self, doc_id: str, line_id: str,
+    def mutex_add_mutexed(self, doc_id: str, position: int,
                           template: Optional[str], net_pattern: str,
                           is_regex: bool) -> dict:
         ctrl = self._require_mutex_ctrl(doc_id)
         ctrl.add_mutexed(template, net_pattern, is_regex)
         return self._serialize_mutex_session(ctrl)
 
-    def mutex_add_active(self, doc_id: str, line_id: str,
+    def mutex_add_active(self, doc_id: str, position: int,
                          template: Optional[str], net_name: str) -> dict:
         ctrl = self._require_mutex_ctrl(doc_id)
         ctrl.add_active(template, net_name)
         return self._serialize_mutex_session(ctrl)
 
-    def mutex_remove_mutexed(self, doc_id: str, line_id: str,
+    def mutex_remove_mutexed(self, doc_id: str, position: int,
                              template: Optional[str], net_pattern: str,
                              is_regex: bool) -> dict:
         ctrl = self._require_mutex_ctrl(doc_id)
         ctrl.remove_mutexed(template, net_pattern, is_regex)
         return self._serialize_mutex_session(ctrl)
 
-    def mutex_remove_active(self, doc_id: str, line_id: str,
+    def mutex_remove_active(self, doc_id: str, position: int,
                             template: Optional[str], net_name: str) -> dict:
         ctrl = self._require_mutex_ctrl(doc_id)
         ctrl.remove_active(template, net_name)
         return self._serialize_mutex_session(ctrl)
 
-    def mutex_set_fev(self, doc_id: str, line_id: str, fev: str) -> dict:
+    def mutex_set_fev(self, doc_id: str, position: int, fev: str) -> dict:
         ctrl = self._require_mutex_ctrl(doc_id)
         ctrl.set_fev_mode(FEVMode(fev) if fev else FEVMode.EMPTY)
         return self._serialize_mutex_session(ctrl)
 
-    def mutex_set_num_active(self, doc_id: str, line_id: str, value: int) -> dict:
+    def mutex_set_num_active(self, doc_id: str, position: int, value: int) -> dict:
         ctrl = self._require_mutex_ctrl(doc_id)
         ctrl.set_num_active(value)
         return self._serialize_mutex_session(ctrl)
 
-    def get_mutex_session(self, doc_id: str, line_id: str) -> dict:
+    def get_mutex_session(self, doc_id: str, position: int) -> dict:
         ctrl = self._require_mutex_ctrl(doc_id)
         return self._serialize_mutex_session(ctrl)
 
-    def commit_mutex_edit(self, doc_id: str, line_id: str) -> dict:
-        """Commit current mutex session state to the document."""
-        doc = self._documents[doc_id]
-        ctrl = self._require_mutex_ctrl(doc_id)
-
-        vr = ctrl.validate()
-        if not vr:
-            return {
-                "error": "Session validation failed",
-                "errors": vr.errors,
-            }
-
-        committed_data = ctrl.to_line_data()
-        raw = mutex_serializer.serialize(committed_data)
-
-        new_line = DocumentLine(
-            line_id=line_id,
-            raw_text=raw,
-            data=committed_data,
-            validation_result=vr,
-        )
-        doc.replace_line(line_id, new_line)
-
-        # Incremental conflict update — only recompute for this line
-        detector = self._conflict_detectors.get(doc_id)
-        if detector is not None:
-            detector.update_line(line_id, committed_data)
-
-        pos = doc.get_position(line_id)
-        return self._serialize_line(pos, new_line, detector)
+    # commit_mutex_edit removed — use the unified commit_edit() instead
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -264,6 +255,7 @@ class DocumentService:
         position: int,
         line: DocumentLine,
         detector: Optional[ConflictDetector] = None,
+        doc: Optional[Document] = None,
     ) -> dict:
         vr = line.validation_result
         status = line.status.value
@@ -279,13 +271,17 @@ class DocumentService:
                     detector.canonical_net_name(nid) or f"net#{nid}"
                     for nid in info.shared_net_ids
                 )
+                # Translate internal line_ids to 0-based positions for the frontend
+                conflicting_positions = sorted(
+                    doc.get_position(lid)
+                    for lid in info.conflicting_line_ids
+                ) if doc is not None else []
                 conflict_info = {
-                    "conflicting_line_ids": sorted(info.conflicting_line_ids),
+                    "conflicting_positions": conflicting_positions,
                     "shared_nets": shared_nets,
                 }
 
         result = {
-            "line_id": line.line_id,
             "position": position,
             "raw_text": line.raw_text,
             "status": status,
@@ -358,7 +354,7 @@ class DocumentService:
                     "net_name": e.net_name,
                     "template_name": e.template_name,
                     "regex_mode": e.regex_mode,
-                    "matches": sorted(e.matches),
+                    "match_count": len(e.matches),
                 }
                 for e in sorted(s.mutexed_entries, key=lambda e: e.net_name)
             ],
@@ -367,7 +363,7 @@ class DocumentService:
                     "net_name": e.net_name,
                     "template_name": e.template_name,
                     "regex_mode": e.regex_mode,
-                    "matches": sorted(e.matches),
+                    "match_count": len(e.matches),
                 }
                 for e in sorted(s.active_entries, key=lambda e: e.net_name)
             ],

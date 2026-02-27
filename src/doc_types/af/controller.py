@@ -4,7 +4,7 @@ from doc_types.af.line_data import AfLineData
 from core.validation_result import ValidationResult
 from doc_types.af.session import AFEditSessionState
 from core.interfaces import IEditController, INetlistQueryService
-from doc_types.af.validator import validate_af
+from doc_types.af.validator import validate
 
 
 class AfEditController(IEditController[AfLineData]):
@@ -59,10 +59,21 @@ class AfEditController(IEditController[AfLineData]):
 
     def validate(self) -> ValidationResult:
         """
-        Full validation: domain + netlist-level warnings.
-        Delegates entirely to the shared validator with service.
+        Two-step validation, run in sequence:
+
+        1. Session structural checks (e.g. AF value range, net name non-empty, etc).
+           If errors exist, return immediately — no point running NQS checks.
+        2. NQS-aware checks via ``validate`` (bus expansion mismatches,
+           missing nets, non-canonical names, template existence, …).
+
+        Callers only see a single ValidationResult.  Errors mean "do not
+        commit"; warnings mean "committed but worth surfacing".
         """
-        return validate_af(self._session.to_line_data(), nqs=self._nqs)
+        session_result = self._session.validate()
+        if not session_result:
+            return session_result
+
+        return validate(self.to_line_data(), nqs=self._nqs)
 
     def to_line_data(self) -> AfLineData:
         """

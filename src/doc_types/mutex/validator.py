@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from core.interfaces import INetlistQueryService
 
 
-def validate_mutex(
+def validate(
     data: MutexLineData,
     nqs: Optional["INetlistQueryService"] = None,
 ) -> ValidationResult:

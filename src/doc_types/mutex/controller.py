@@ -7,7 +7,7 @@ from core.validation_result import ValidationResult
 
 from doc_types.mutex.session import MutexEditSessionState
 from core.interfaces import IEditController, INetlistQueryService
-from doc_types.mutex.validator import validate_mutex
+from doc_types.mutex.validator import validate
 
 
 class MutexEditController(IEditController[MutexLineData]):
@@ -101,7 +101,7 @@ class MutexEditController(IEditController[MutexLineData]):
 
         1. Session structural checks (enough nets, num_active bounds).
            If errors exist, return immediately — no point running NQS checks.
-        2. NQS-aware checks via ``validate_mutex`` (bus expansion mismatches,
+        2. NQS-aware checks via ``validate`` (bus expansion mismatches,
            missing nets, non-canonical names, template existence, …).
 
         Callers only see a single ValidationResult.  Errors mean "do not
@@ -111,7 +111,7 @@ class MutexEditController(IEditController[MutexLineData]):
         if not session_result:
             return session_result
 
-        return validate_mutex(self.to_line_data(), nqs=self._nqs)
+        return validate(self.to_line_data(), nqs=self._nqs)
 
     def to_line_data(self) -> MutexLineData:
         """

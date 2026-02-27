@@ -42,7 +42,18 @@ app.include_router(router)
 # Serve static frontend
 _static_dir = Path(__file__).resolve().parent / "static"
 if _static_dir.is_dir():
+    # Serve /assets/ for JS/CSS bundles produced by Vite
+    _assets_dir = _static_dir / "assets"
+    if _assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="assets")
+    # Serve remaining static files (e.g. vite.svg) at root-level
     app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
+
+@app.get("/vite.svg")
+def vite_svg():
+    """Serve the Vite favicon."""
+    return FileResponse(str(_static_dir / "vite.svg"))
 
 
 @app.get("/")

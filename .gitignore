@@ -92,3 +92,9 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+app/static/assets/
+app/static/vite.svg

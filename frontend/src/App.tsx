@@ -71,13 +71,15 @@ function AppContent() {
   // Bottom panel height in pixels (when expanded)
   const [bottomHeight, setBottomHeight] = useState(200)
 
+  const refreshLinesRef = useRef(store.refreshLines)
+  refreshLinesRef.current = store.refreshLines
+
   // Refresh lines when active document changes
   useEffect(() => {
     if (store.activeDocId) {
-      store.refreshLines()
+      refreshLinesRef.current()
     }
     setSelectedLine(null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store.activeDocId])
 
   /* ── Chat-panel drag-to-resize ──────────────────────────────────────── */

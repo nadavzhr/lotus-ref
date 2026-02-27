@@ -46,8 +46,6 @@ if _static_dir.is_dir():
     _assets_dir = _static_dir / "assets"
     if _assets_dir.is_dir():
         app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="assets")
-    # Serve remaining static files (e.g. vite.svg) at root-level
-    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 
 @app.get("/vite.svg")

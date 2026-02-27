@@ -231,6 +231,8 @@ function MutexEditForm({
   const data = session.data
   const mutexedNets = (data.mutexed_nets as string[]) ?? []
   const activeNets = (data.active_nets as string[]) ?? []
+  const [newMutexedNet, setNewMutexedNet] = useState("")
+  const [newActiveNet, setNewActiveNet] = useState("")
 
   const handleAddMutexed = useCallback(
     async (net: string) => {
@@ -318,14 +320,34 @@ function MutexEditForm({
               </div>
             </ScrollArea>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-6 text-[10px] gap-1 w-full"
-            onClick={() => handleAddMutexed("new_net")}
-          >
-            <Plus className="h-3 w-3" /> Add Net
-          </Button>
+          <div className="flex gap-1">
+            <Input
+              placeholder="net name"
+              className="h-6 text-[10px] font-mono flex-1"
+              value={newMutexedNet}
+              onChange={(e) => setNewMutexedNet(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && newMutexedNet.trim()) {
+                  handleAddMutexed(newMutexedNet.trim())
+                  setNewMutexedNet("")
+                }
+              }}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 text-[10px] gap-1 px-2 shrink-0"
+              disabled={!newMutexedNet.trim()}
+              onClick={() => {
+                if (newMutexedNet.trim()) {
+                  handleAddMutexed(newMutexedNet.trim())
+                  setNewMutexedNet("")
+                }
+              }}
+            >
+              <Plus className="h-3 w-3" />
+            </Button>
+          </div>
         </div>
 
         {/* Active nets list */}
@@ -359,14 +381,34 @@ function MutexEditForm({
               </div>
             </ScrollArea>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-6 text-[10px] gap-1 w-full"
-            onClick={() => handleAddActive("new_net")}
-          >
-            <Plus className="h-3 w-3" /> Add Active Net
-          </Button>
+          <div className="flex gap-1">
+            <Input
+              placeholder="net name"
+              className="h-6 text-[10px] font-mono flex-1"
+              value={newActiveNet}
+              onChange={(e) => setNewActiveNet(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && newActiveNet.trim()) {
+                  handleAddActive(newActiveNet.trim())
+                  setNewActiveNet("")
+                }
+              }}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 text-[10px] gap-1 px-2 shrink-0"
+              disabled={!newActiveNet.trim()}
+              onClick={() => {
+                if (newActiveNet.trim()) {
+                  handleAddActive(newActiveNet.trim())
+                  setNewActiveNet("")
+                }
+              }}
+            >
+              <Plus className="h-3 w-3" />
+            </Button>
+          </div>
         </div>
       </div>
     </div>

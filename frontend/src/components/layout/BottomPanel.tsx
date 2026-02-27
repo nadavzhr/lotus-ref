@@ -78,6 +78,8 @@ function XTermTab() {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
+  const themeRef = useRef(theme)
+  themeRef.current = theme
 
   useEffect(() => {
     if (termRef.current) {
@@ -91,7 +93,7 @@ function XTermTab() {
     const term = new XTerminal({
       fontSize: 12,
       fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-      theme: XTERM_THEMES[theme],
+      theme: XTERM_THEMES[themeRef.current],
       cursorBlink: true,
       convertEol: true,
     })
@@ -146,7 +148,6 @@ function XTermTab() {
       termRef.current = null
       fitRef.current = null
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   return <div ref={containerRef} className="h-full w-full" />

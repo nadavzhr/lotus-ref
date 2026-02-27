@@ -1,4 +1,16 @@
-from doc_types.mutex.exceptions import *
+from __future__ import annotations
+
+from doc_types.mutex.exceptions import (
+    DuplicateEntryError,
+    TemplateMismatchError,
+    RegexModeMismatchError,
+    IntersectionError,
+    ActiveRegexError,
+    ActiveMultipleMatchesError,
+    NoMatchesError,
+    EntryNotFoundError,
+    InvalidFEVModeError,
+)
 from doc_types.mutex.entry import MutexEntry
 from core.validation_result import ValidationResult
 from core.interfaces import IEditSessionState

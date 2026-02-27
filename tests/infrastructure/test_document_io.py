@@ -65,7 +65,7 @@ class TestParseLineMutex:
         assert line.status == LineStatus.OK
         assert isinstance(line.data, MutexLineData)
         assert line.data.num_active == 2
-        assert line.data.mutexed_nets == ["net1", "net2"]
+        assert line.data.mutexed_nets == ("net1", "net2")
 
     def test_parse_error(self):
         line = parse_line("this is garbage", DocumentType.MUTEX)
@@ -121,7 +121,7 @@ class TestLoadDocumentMutex:
         assert len(doc) == 2
         assert doc[0].status == LineStatus.COMMENT
         assert doc[1].status == LineStatus.OK
-        assert doc[1].data.mutexed_nets == ["net1", "net2"]
+        assert doc[1].data.mutexed_nets == ("net1", "net2")
 
 
 # ===========================================================

@@ -26,12 +26,12 @@ class Document:
     Mutable ordered collection of :class:`DocumentLine` objects.
 
     Internal invariant: ``_index[line.line_id] == position`` for every
-    line.  The index is rebuilt after any structural mutation (insert /
-    remove).  Updates that only change ``data`` or ``status`` inside an
-    existing ``DocumentLine`` do *not* need a rebuild.
+    line.  The index is maintained incrementally on insert / remove /
+    replace.  Updates that only change ``data`` or ``status`` inside an
+    existing ``DocumentLine`` do *not* need an index update.
     """
 
-    __slots__ = ("doc_type", "file_path", "_lines", "_index")
+    __slots__ = ("doc_type", "file_path", "_lines", "_index", "_lines_cache")
 
     def __init__(
         self,
@@ -43,6 +43,7 @@ class Document:
         self.file_path: str = file_path
         self._lines: list[DocumentLine] = list(lines) if lines else []
         self._index: dict[str, int] = {}
+        self._lines_cache: tuple[DocumentLine, ...] | None = None
         self._rebuild_index()
 
     # ------------------------------------------------------------------
@@ -51,8 +52,10 @@ class Document:
 
     @property
     def lines(self) -> tuple[DocumentLine, ...]:
-        """Return a tuple copy so callers cannot break internal ordering."""
-        return tuple(self._lines)
+        """Return a cached tuple so callers cannot break internal ordering."""
+        if self._lines_cache is None:
+            self._lines_cache = tuple(self._lines)
+        return self._lines_cache
 
     def __len__(self) -> int:
         return len(self._lines)
@@ -82,19 +85,29 @@ class Document:
             raise ValueError(f"Duplicate line_id: {line.line_id}")
         self._lines.append(line)
         self._index[line.line_id] = len(self._lines) - 1
+        self._lines_cache = None
 
     def insert_line(self, position: int, line: DocumentLine) -> None:
         """Insert a line at the given 0-based position."""
         if line.line_id in self._index:
             raise ValueError(f"Duplicate line_id: {line.line_id}")
         self._lines.insert(position, line)
-        self._rebuild_index()
+        self._lines_cache = None
+        # Shift entries at or after the insertion point up by 1
+        for lid, idx in self._index.items():
+            if idx >= position:
+                self._index[lid] = idx + 1
+        self._index[line.line_id] = position
 
     def remove_line(self, line_id: str) -> DocumentLine:
         """Remove and return a line by its UUID.  Raises KeyError."""
-        pos = self._index[line_id]
+        pos = self._index.pop(line_id)
         removed = self._lines.pop(pos)
-        self._rebuild_index()
+        self._lines_cache = None
+        # Shift entries after the removed position down by 1
+        for lid, idx in self._index.items():
+            if idx > pos:
+                self._index[lid] = idx - 1
         return removed
 
     def replace_line(self, line_id: str, new_line: DocumentLine) -> None:
@@ -107,6 +120,7 @@ class Document:
         """
         pos = self._index.pop(line_id)
         self._lines[pos] = new_line
+        self._lines_cache = None
         # If the id changed we need a full rebuild; if same, just update index
         if new_line.line_id != line_id:
             self._rebuild_index()

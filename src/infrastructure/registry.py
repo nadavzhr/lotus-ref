@@ -36,6 +36,8 @@ class DocumentTypeHandler(Generic[T]):
     parse: Callable[[str], T]
     serialize: Callable[[T], str]
     validate: Callable[[T, Optional["INetlistQueryService"]], "ValidationResult"]
+    from_dict: Callable[[dict], T]
+    to_json: Callable[[T], dict]
 
 
 _handlers: dict[DocumentType, DocumentTypeHandler[Any]] = {}

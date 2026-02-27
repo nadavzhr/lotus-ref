@@ -1,27 +1,18 @@
+from __future__ import annotations
+
 import re
-import sqlite3
-from threading import RLock
 from functools import lru_cache
 from typing import Optional, TYPE_CHECKING
 import logging
 from pathlib import Path
 
+from nqs.netlist_database import NetlistDatabase
+
 if TYPE_CHECKING:
     from .netlist_parser.Netlist import Netlist
     from .netlist_parser.NetlistBuilder import NetlistBuilder
 
-def get_logger(name: str) -> logging.Logger:
-    logger = logging.getLogger(name)
-    if not logger.hasHandlers():
-        # Configure logger with a simple console handler if not already configured
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-    
-    return logger
-
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 class NetlistQueryService:
     """
@@ -32,7 +23,6 @@ class NetlistQueryService:
     BUS_PATTERN = re.compile(r'\[(\d+)[:-](\d+)\]')
     INDEX_PATTERN = re.compile(r'\[(\d+)\]')  # Matches individual indices like [0], [1], etc.
     MAX_BUS_EXPANSION = 10000
-    SQLITE_MAX_VARS_PER_QUERY = 900
 
     def __init__(self, cell: str, spice_file: 'Path', netlist: 'NetlistBuilder'):
         """
@@ -53,8 +43,7 @@ class NetlistQueryService:
 
         # Initialize lifecycle controls early so cleanup/destructor are safe
         # even if initialization fails part-way through.
-        self._db_lock = RLock()
-        self._is_closed = False
+        self._db: Optional[NetlistDatabase] = None
 
         try:
             logger.info(f"Loading spice file for cell '{cell}': {spice_file}")
@@ -81,7 +70,7 @@ class NetlistQueryService:
         
         # Initialize SQLite database for efficient large querying
         logger.debug("Initializing SQLite database for netlist queries")
-        self._init_database()
+        self._db = NetlistDatabase(self._all_nets_in_templates)
         logger.debug("Finished initializing NetlistQueryService")
 
 
@@ -340,7 +329,8 @@ class NetlistQueryService:
 
         return _expand(pattern)
 
-    def collapse_bus_notation(self, net_names: list[str]) -> Optional[str]:
+    @staticmethod
+    def collapse_bus_notation(net_names: list[str]) -> Optional[str]:
         """
         Collapse a list of net names with bus notation into a compact representation.
         Examples:
@@ -361,20 +351,20 @@ class NetlistQueryService:
 
         for name in normalized_names:
             # Try to extract indices from both [num:num] and [num] patterns
-            bus_indices = self.BUS_PATTERN.findall(name)  # Returns list of (start, end) tuples
+            bus_indices = NetlistQueryService.BUS_PATTERN.findall(name)  # Returns list of (start, end) tuples
             if bus_indices:
                 # Flatten the bus notation ranges into individual indices
                 indices = [int(idx) for pair in bus_indices for idx in pair]
             else:
                 # Try individual index pattern [num]
-                indices = [int(x) for x in self.INDEX_PATTERN.findall(name)]
+                indices = [int(x) for x in NetlistQueryService.INDEX_PATTERN.findall(name)]
             
             index_lists.append(indices)
 
             # Replace indices with placeholders to get structure
             # First replace bus patterns, then individual indices
-            structure = self.BUS_PATTERN.sub("[]", name)
-            structure = self.INDEX_PATTERN.sub("[]", structure)
+            structure = NetlistQueryService.BUS_PATTERN.sub("[]", name)
+            structure = NetlistQueryService.INDEX_PATTERN.sub("[]", structure)
             
             if template is None:
                 template = structure
@@ -464,18 +454,18 @@ class NetlistQueryService:
     def _match_nets_regex(self, templates: list[str], net_name: str) -> list[str]:
         """
         Match nets by regex pattern across all given templates in a single SQL query.
+
+        Raises ``re.error`` (wrapped with a user-friendly message) if the
+        pattern is invalid, so the UI can surface a meaningful error.
         """
         if not templates:
             return []
-        placeholders = ','.join('?' * len(templates))
         try:
-            results = self._execute_sql_query(
-                f'SELECT template_name, net_name FROM nets WHERE template_name IN ({placeholders}) AND net_name REGEXP ?',
-                (*templates, net_name)
-            )
-        except Exception as e:
-            logger.error(f"Error matching net regex pattern '{net_name}': {e}")
-            return []
+            results = self._db.match_regex(templates, net_name)
+        except re.error as e:
+            raise re.error(
+                f"Invalid regex pattern '{net_name}': {e}"
+            ) from e
         return self._format_net_results(results)
 
     def _match_nets_bus(self, templates: list[str], net_name: str) -> list[str]:
@@ -497,18 +487,7 @@ class NetlistQueryService:
         if not expanded:
             return []
 
-        t_placeholders = ','.join('?' * len(templates))
-        available_for_nets = max(1, self.SQLITE_MAX_VARS_PER_QUERY - len(templates))
-        results = []
-        for start in range(0, len(expanded), available_for_nets):
-            net_chunk = expanded[start:start + available_for_nets]
-            n_placeholders = ','.join('?' * len(net_chunk))
-            chunk_results = self._execute_sql_query(
-                f'SELECT template_name, net_name FROM nets WHERE template_name IN ({t_placeholders}) AND net_name IN ({n_placeholders})',
-                (*templates, *net_chunk)
-            )
-            results.extend(chunk_results)
-
+        results = self._db.match_bus(templates, expanded)
         return self._format_net_results(results)
 
     def _match_nets_exact(self, templates: list[str], net_name: str) -> list[str]:
@@ -517,11 +496,7 @@ class NetlistQueryService:
         """
         if not templates:
             return []
-        placeholders = ','.join('?' * len(templates))
-        results = self._execute_sql_query(
-            f'SELECT template_name, net_name FROM nets WHERE template_name IN ({placeholders}) AND net_name = ?',
-            (*templates, net_name)
-        )
+        results = self._db.match_exact(templates, net_name)
         return self._format_net_results(results)
 
     def _normalize_template_name(self, template_name: Optional[str]) -> Optional[str]:
@@ -591,86 +566,17 @@ class NetlistQueryService:
         ]
 
 ###########################################################################
-############################ SQLITE DATABASE ##############################
+############################ LIFECYCLE ####################################
 ###########################################################################
-
-    def _init_database(self) -> None:
-        """Initialize in-memory SQLite database with netlist data.
-        
-        Uses a denormalized single-table WITHOUT ROWID schema keyed on
-        (template_name, net_name).  This eliminates JOINs and stores data
-        directly in the covering primary-key B-tree — queries answered
-        entirely from the index with no heap lookup.
-        
-        Performance optimizations applied:
-        - In-memory database (much faster than file-based)
-        - WITHOUT ROWID — data lives in the PK B-tree, no separate heap
-        - Disabled journaling during bulk insert
-        - Batch inserts with executemany
-        - Plain tuples (no sqlite3.Row overhead)
-        """
-        self._db_path = ':memory:'
-        self._db_conn = sqlite3.connect(self._db_path, check_same_thread=False)
-        def _regexp(expr, item):
-            if item is None:
-                return 0
-            try:
-                return 1 if re.search(expr, item, re.IGNORECASE) else 0
-            except re.error:
-                return 0  # Invalid regex patterns do not match anything
-        self._db_conn.create_function("REGEXP", 2, _regexp)
-        cursor = self._db_conn.cursor()
-        
-        # Performance pragmas for bulk insert
-        cursor.execute('PRAGMA synchronous = OFF')
-        cursor.execute('PRAGMA journal_mode = OFF')
-        cursor.execute('PRAGMA cache_size = 100000')
-        cursor.execute('PRAGMA temp_store = MEMORY')
-        
-        # Denormalized single-table schema — no JOINs needed.
-        # WITHOUT ROWID stores rows directly in the PK B-tree (covering index).
-        cursor.execute('''
-            CREATE TABLE nets (
-                template_name TEXT NOT NULL,
-                net_name TEXT NOT NULL,
-                PRIMARY KEY (template_name, net_name)
-            ) WITHOUT ROWID
-        ''')
-        
-        # Batch insert all (template, net) pairs
-        nets_data = []
-        for template, nets in self._all_nets_in_templates.items():
-            nets_data.extend((template, net) for net in nets)
-        cursor.executemany(
-            'INSERT INTO nets (template_name, net_name) VALUES (?, ?)', nets_data
-        )
-        
-        self._db_conn.commit()
-        
-        # Reset pragmas to safer defaults for runtime queries
-        cursor.execute('PRAGMA synchronous = NORMAL')
-    
-    def _execute_sql_query(self, query: str, params: tuple = ()) -> list:
-        """Execute a SQL query and return all results.
-        
-        Args:
-            query: SQL query string
-            params: Query parameters tuple
-            
-        Returns:
-            List of result rows
-        """
-        if self._is_closed:
-            raise RuntimeError("NetlistQueryService is closed")
-
-        with self._db_lock:
-            cursor = self._db_conn.cursor()
-            cursor.execute(query, params)
-            return cursor.fetchall()
 
     def close(self) -> None:
         """Explicitly close DB resources for this service instance."""
-        self._cleanup_database()
+        if self._db is not None:
+            self._db.close()
+        self.net_exists.cache_clear()
+        self.find_matches.cache_clear()
+        self.find_net_instance_names.cache_clear()
+        self._resolve_canonical_net_name.cache_clear()
 
     def __enter__(self):
         """Allow usage as a context-managed service."""
@@ -679,29 +585,7 @@ class NetlistQueryService:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Close DB resources when leaving context-manager scope."""
         self.close()
-    
-    def _cleanup_database(self) -> None:
-        """Cleanup database connection."""
-        if not hasattr(self, '_db_lock'):
-            return
 
-        with self._db_lock:
-            if getattr(self, '_is_closed', False):
-                return
-
-            try:
-                if hasattr(self, '_db_conn') and self._db_conn:
-                    self._db_conn.close()
-            except Exception:
-                pass  # Ignore cleanup errors
-            finally:
-                self._is_closed = True
-
-            self.net_exists.cache_clear()
-            self.find_matches.cache_clear()
-            self.find_net_instance_names.cache_clear()
-            self._resolve_canonical_net_name.cache_clear()
-    
     def __del__(self):
         """Close database connection on cleanup."""
-        self._cleanup_database()
+        self.close()

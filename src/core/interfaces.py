@@ -6,12 +6,20 @@ This module defines the contracts that document types implement:
 - IEditController: orchestrates editing a single line
 - IEditSessionState: mutable state for a single line edit session
 """
+from __future__ import annotations
+
 import abc
 from typing import Generic, Protocol, Optional, TypeVar
 
+from core.net_spec import NetSpec
 from core.validation_result import ValidationResult
 
 T = TypeVar("T")
+
+
+class HasNetSpecs(Protocol):
+    """Any line-data object that can enumerate its net references."""
+    def net_specs(self) -> list[NetSpec]: ...
 
 
 class INetlistQueryService(Protocol):

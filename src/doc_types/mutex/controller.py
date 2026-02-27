@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Optional
 
 from doc_types.mutex.exceptions import EntryNotFoundError
@@ -120,10 +122,10 @@ class MutexEditController(IEditController[MutexLineData]):
         return MutexLineData(
             num_active=self._session.num_active,
             fev=self._session.fev,
-            is_regexp=self._session.regex_mode,
+            is_net_regex=self._session.regex_mode,
             template=self._session.template,
-            mutexed_nets=[e.net_name for e in self._session.mutexed_entries],
-            active_nets=[e.net_name for e in self._session.active_entries],
+            mutexed_nets=tuple(e.net_name for e in self._session.mutexed_entries),
+            active_nets=tuple(e.net_name for e in self._session.active_entries),
         )
 
     def from_line_data(self, data: MutexLineData) -> None:
@@ -144,7 +146,7 @@ class MutexEditController(IEditController[MutexLineData]):
                 if net_name in data.active_nets:
                     self.add_active(template, net_name)
                 else:
-                    self.add_mutexed(template, net_name, data.is_regexp)
+                    self.add_mutexed(template, net_name, data.is_net_regex)
 
         # num_active is derived when active entries exist;
         # only set the explicit count when there are none.

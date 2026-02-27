@@ -1,14 +1,16 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Optional
 
 from doc_types.af.line_data import AfLineData
 from core.validation_result import ValidationResult
 from core.interfaces import IEditSessionState
-from doc_types.af.validator import validate
+from doc_types.af import validator
 
 
 @dataclass(slots=True)
-class AFEditSessionState(IEditSessionState):
+class AfEditSessionState(IEditSessionState):
     session_id: str
     template_name: Optional[str] = None
     template_regex_mode: bool = False
@@ -33,14 +35,8 @@ class AFEditSessionState(IEditSessionState):
     def validate(self) -> ValidationResult:
         """Domain-only (Layer 2) validation without netlist service.
 
+        Delegates to the shared AF validator so rules are defined once.
         NQS-aware validation (Layer 3) runs via the controller's
         ``validate()`` method, which passes the service explicitly.
         """
-        # Af value must be between 0 and 1
-        if not (0.0 <= self.af_value <= 1.0):
-            return ValidationResult(errors=["AF value must be between 0 and 1."])
-        if not self.em_enabled and not self.sh_enabled:
-            return ValidationResult(errors=["At least one of EM mode or SH mode must be enabled."])
-        if not self.net_name:
-            return ValidationResult(errors=["Net name cannot be empty."])
-        return ValidationResult(errors=[])
+        return validator.validate(self.to_line_data())

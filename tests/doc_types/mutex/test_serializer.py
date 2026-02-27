@@ -8,37 +8,37 @@ from doc_types.mutex import MutexLineData, FEVMode, serializer as mutex_serializ
 class TestMutexSerializer:
 
     def test_simple_regular(self):
-        data = MutexLineData(num_active=2, mutexed_nets=["net1", "net2"])
+        data = MutexLineData(num_active=2, mutexed_nets=("net1", "net2"))
         result = mutex_serializer.serialize(data)
         assert result == "mutex2 regular net1 net2"
 
     def test_with_fev_suffix(self):
-        data = MutexLineData(num_active=2, fev=FEVMode.LOW, mutexed_nets=["net1", "net2"])
+        data = MutexLineData(num_active=2, fev=FEVMode.LOW, mutexed_nets=("net1", "net2"))
         result = mutex_serializer.serialize(data)
         assert result == "mutex2_low regular net1 net2"
 
     def test_regexp_mode(self):
-        data = MutexLineData(num_active=2, is_regexp=True, mutexed_nets=["vdd.*", "vss.*"])
+        data = MutexLineData(num_active=2, is_net_regex=True, mutexed_nets=("vdd.*", "vss.*"))
         result = mutex_serializer.serialize(data)
         assert result == "mutex2 regexp vdd.* vss.*"
 
     def test_template_mode(self):
         data = MutexLineData(
-            num_active=2, template="T1", mutexed_nets=["net1", "net2"],
+            num_active=2, template="T1", mutexed_nets=("net1", "net2"),
         )
         result = mutex_serializer.serialize(data)
         assert result == "mutex2 template T1 net1 net2"
 
     def test_with_active_nets(self):
         data = MutexLineData(
-            num_active=2, mutexed_nets=["net1", "net2"], active_nets=["net1"],
+            num_active=2, mutexed_nets=("net1", "net2"), active_nets=("net1",),
         )
         result = mutex_serializer.serialize(data)
         assert result == "mutex2 regular net1 net2 on=net1"
 
     def test_multiple_active(self):
         data = MutexLineData(
-            num_active=3, mutexed_nets=["a", "b", "c"], active_nets=["a", "b", "c"],
+            num_active=3, mutexed_nets=("a", "b", "c"), active_nets=("a", "b", "c"),
         )
         result = mutex_serializer.serialize(data)
         assert "on=a,b,c" in result

@@ -3,6 +3,8 @@ Parser for Activity Factor configuration lines.
 
 Line format: {template:net} AF_VALUE flags   or   {net} AF_VALUE flags
 """
+from __future__ import annotations
+
 import re
 
 from doc_types.af.line_data import AfLineData

@@ -1,8 +1,13 @@
 """
 Serializer for Activity Factor configuration lines.
 
-Converts AfLineData back to config file text format.
+Converts AfLineData back to config file text format, and provides
+JSON round-trip helpers (``from_dict`` / ``to_json``).
 """
+from __future__ import annotations
+
+import dataclasses
+
 from doc_types.af.line_data import AfLineData
 from doc_types.af.parser import (
     FLAG_EM, FLAG_SH, FLAG_SCH,
@@ -50,3 +55,25 @@ def serialize(data: AfLineData) -> str:
         name = f"{{{data.net}}}"
 
     return f"{name} {data.af_value} {cfg_str}"
+
+
+def from_dict(fields: dict) -> AfLineData:
+    """Build an AfLineData from a raw JSON dict."""
+    template = fields.get("template", "")
+    if template == "":
+        template = None
+    return AfLineData(
+        template=template,
+        net=fields.get("net", ""),
+        af_value=float(fields.get("af_value", 0.0)),
+        is_template_regex=bool(fields.get("is_template_regex", False)),
+        is_net_regex=bool(fields.get("is_net_regex", False)),
+        is_em_enabled=bool(fields.get("is_em_enabled", False)),
+        is_sh_enabled=bool(fields.get("is_sh_enabled", False)),
+        is_sch_enabled=bool(fields.get("is_sch_enabled", False)),
+    )
+
+
+def to_json(data: AfLineData) -> dict:
+    """Convert AfLineData to a JSON-safe dict."""
+    return dataclasses.asdict(data)

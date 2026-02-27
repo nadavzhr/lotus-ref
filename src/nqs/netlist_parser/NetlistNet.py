@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 class NetlistNet:
 
     def __init__(self, name, is_interface=False):

@@ -23,7 +23,7 @@ class TestConflictStoreEmpty:
 
     def test_single_line_no_conflict(self):
         store = ConflictStore()
-        store.update_line("L1", {100, 200})
+        store.update_line("L1", {"net100", "net200"})
         assert not store.is_conflicting("L1")
         assert store.get_conflicting_lines("L1") == set()
         assert store.get_conflicting_net_ids("L1") == frozenset()
@@ -34,81 +34,81 @@ class TestConflictStoreDetection:
 
     def test_two_lines_same_net_conflict(self):
         store = ConflictStore()
-        store.update_line("L1", {100, 200})
-        store.update_line("L2", {100, 300})
+        store.update_line("L1", {"net100", "net200"})
+        store.update_line("L2", {"net100", "net300"})
 
         assert store.is_conflicting("L1")
         assert store.is_conflicting("L2")
         assert store.get_conflicting_lines("L1") == {"L2"}
         assert store.get_conflicting_lines("L2") == {"L1"}
-        assert store.get_conflicting_net_ids("L1") == frozenset({100})
-        assert store.get_conflicting_net_ids("L2") == frozenset({100})
+        assert store.get_conflicting_net_ids("L1") == frozenset({"net100"})
+        assert store.get_conflicting_net_ids("L2") == frozenset({"net100"})
 
     def test_no_overlap_no_conflict(self):
         store = ConflictStore()
-        store.update_line("L1", {100})
-        store.update_line("L2", {200})
+        store.update_line("L1", {"net100"})
+        store.update_line("L2", {"net200"})
 
         assert not store.is_conflicting("L1")
         assert not store.is_conflicting("L2")
 
     def test_three_lines_shared_net(self):
         store = ConflictStore()
-        store.update_line("L1", {100})
-        store.update_line("L2", {100, 300})
-        store.update_line("L3", {100})
+        store.update_line("L1", {"net100"})
+        store.update_line("L2", {"net100", "net300"})
+        store.update_line("L3", {"net100"})
 
         assert store.is_conflicting("L1")
         assert store.get_conflicting_lines("L1") == {"L2", "L3"}
-        assert store.get_conflicting_net_ids("L1") == frozenset({100})
+        assert store.get_conflicting_net_ids("L1") == frozenset({"net100"})
 
     def test_multiple_shared_nets(self):
         store = ConflictStore()
-        store.update_line("L1", {100, 200})
-        store.update_line("L2", {100, 200})
+        store.update_line("L1", {"net100", "net200"})
+        store.update_line("L2", {"net100", "net200"})
 
-        assert store.get_conflicting_net_ids("L1") == frozenset({100, 200})
+        assert store.get_conflicting_net_ids("L1") == frozenset({"net100", "net200"})
 
     def test_conflict_info(self):
         store = ConflictStore()
-        store.update_line("L1", {100, 200})
-        store.update_line("L2", {100})
+        store.update_line("L1", {"net100", "net200"})
+        store.update_line("L2", {"net100"})
 
         info = store.get_conflict_info("L1")
         assert info is not None
         assert isinstance(info, ConflictInfo)
         assert info.conflicting_line_ids == {"L2"}
-        assert info.shared_net_ids == frozenset({100})
+        assert info.shared_net_ids == frozenset({"net100"})
 
 
 class TestConflictStoreUpdates:
 
     def test_update_resolves_conflict(self):
         store = ConflictStore()
-        store.update_line("L1", {100})
-        store.update_line("L2", {100})
+        store.update_line("L1", {"net100"})
+        store.update_line("L2", {"net100"})
         assert store.is_conflicting("L1")
 
         # L2 changes to a different net — conflict resolved
-        store.update_line("L2", {300})
+        store.update_line("L2", {"net300"})
         assert not store.is_conflicting("L1")
         assert not store.is_conflicting("L2")
 
     def test_update_creates_conflict(self):
         store = ConflictStore()
-        store.update_line("L1", {100})
-        store.update_line("L2", {300})
+        store.update_line("L1", {"net100"})
+        store.update_line("L2", {"net300"})
         assert not store.is_conflicting("L1")
 
         # L2 now covers 100 too
-        store.update_line("L2", {100})
+        store.update_line("L2", {"net100"})
         assert store.is_conflicting("L1")
         assert store.is_conflicting("L2")
 
     def test_update_with_empty_removes_from_index(self):
         store = ConflictStore()
-        store.update_line("L1", {100})
-        store.update_line("L2", {100})
+        store.update_line("L1", {"net100"})
+        store.update_line("L2", {"net100"})
         assert store.is_conflicting("L1")
 
         store.update_line("L2", set())
@@ -116,8 +116,8 @@ class TestConflictStoreUpdates:
 
     def test_remove_line(self):
         store = ConflictStore()
-        store.update_line("L1", {100})
-        store.update_line("L2", {100})
+        store.update_line("L1", {"net100"})
+        store.update_line("L2", {"net100"})
         assert store.is_conflicting("L1")
 
         store.remove_line("L2")
@@ -130,8 +130,8 @@ class TestConflictStoreUpdates:
 
     def test_clear(self):
         store = ConflictStore()
-        store.update_line("L1", {100})
-        store.update_line("L2", {100})
+        store.update_line("L1", {"net100"})
+        store.update_line("L2", {"net100"})
         store.clear()
         assert not store.is_conflicting("L1")
         assert not store.is_conflicting("L2")
@@ -187,20 +187,18 @@ class TestConflictDetectorResolve:
         nqs = _make_mock_nqs_for_detector()
         det = ConflictDetector(nqs)
 
-        ids = det.resolve_to_canonical_ids(None, "vdd", False, False)
-        assert len(ids) == 1
-        nid = next(iter(ids))
-        assert det.canonical_net_name(nid) == "vdd"
+        ids = det.resolve_to_canonical_names(None, "vdd", False, False)
+        assert ids == frozenset({"vdd"})
 
     def test_empty_net_returns_empty(self):
         nqs = _make_mock_nqs_for_detector()
         det = ConflictDetector(nqs)
-        assert det.resolve_to_canonical_ids(None, "", False, False) == frozenset()
+        assert det.resolve_to_canonical_names(None, "", False, False) == frozenset()
 
     def test_nonexistent_net_returns_empty(self):
         nqs = _make_mock_nqs_for_detector()
         det = ConflictDetector(nqs)
-        assert det.resolve_to_canonical_ids(None, "nonexistent", False, False) == frozenset()
+        assert det.resolve_to_canonical_names(None, "nonexistent", False, False) == frozenset()
 
 
 class TestConflictDetectorRebuild:
@@ -285,7 +283,7 @@ class TestConflictDetectorRebuild:
 
         lines = [
             _make_line("L1", AfLineData(net="vdd", af_value=0.5, is_em_enabled=True)),
-            _make_line("L2", MutexLineData(num_active=1, mutexed_nets=["vdd", "vss"])),
+            _make_line("L2", MutexLineData(num_active=1, mutexed_nets=("vdd", "vss"))),
         ]
         det.rebuild(lines)
         # L1 covers vdd, L2 covers vdd+vss → overlap on vdd

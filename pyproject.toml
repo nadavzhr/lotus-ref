@@ -1,0 +1,25 @@
+[project]
+name = "lotus-ref"
+version = "0.1.0"
+requires-python = ">=3.12"
+description = "DCFG document editor with netlist-aware validation and conflict detection."
+dependencies = [
+    "fastapi>=0.110",
+    "pydantic>=2.0",
+    "uvicorn>=0.25",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

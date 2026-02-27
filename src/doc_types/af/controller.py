@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 from typing import Optional
 
 from doc_types.af.line_data import AfLineData
 from core.validation_result import ValidationResult
-from doc_types.af.session import AFEditSessionState
+from doc_types.af.session import AfEditSessionState
 from core.interfaces import IEditController, INetlistQueryService
 from doc_types.af.validator import validate
 
@@ -11,21 +13,21 @@ class AfEditController(IEditController[AfLineData]):
 
     def __init__(self, netlist_query_service: INetlistQueryService):
         self._nqs = netlist_query_service
-        self._session = AFEditSessionState("")  # Initialize with an empty session; will be replaced on start_session
+        self._session = AfEditSessionState("")  # Initialize with an empty session; will be replaced on start_session
 
     # ---------------------------
     # Session lifecycle
     # ---------------------------
 
     def start_session(self, session_id: str) -> None:
-        self._session = AFEditSessionState(session_id)
+        self._session = AfEditSessionState(session_id)
 
     # ---------------------------
     # Properties (read-only views)
     # ---------------------------
 
     @property
-    def session(self) -> AFEditSessionState:
+    def session(self) -> AfEditSessionState:
         return self._session
 
     # ---------------------------

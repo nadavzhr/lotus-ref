@@ -14,11 +14,13 @@ from __future__ import annotations
 import dataclasses
 from typing import Any, Optional
 
-from core import DocumentType, Document, DocumentLine, LineData, LineStatus, IEditController, INetlistQueryService
+from core import DocumentType, Document, DocumentLine, HasNetSpecs, LineStatus, IEditController, INetlistQueryService
 from core.conflict_store import ConflictDetector
-from doc_types.af import AfLineData, AfEditController, serializer as af_serializer
-from doc_types.mutex import MutexLineData, FEVMode, MutexEditController, serializer as mutex_serializer
+from core.validation_result import ValidationResult
+from doc_types.af import AfEditController
+from doc_types.mutex import FEVMode, MutexEditController
 from infrastructure import load_document, save_document
+from infrastructure.registry import get_handler
 
 
 
@@ -60,11 +62,22 @@ class DocumentService:
     # Line access
     # ------------------------------------------------------------------
 
-    def get_lines(self, doc_id: str) -> list[dict]:
-        """Return all lines in a document as JSON-friendly dicts."""
+    def get_lines(
+        self, doc_id: str, *, offset: int = 0, limit: Optional[int] = None,
+    ) -> list[dict]:
+        """Return lines in a document as JSON-friendly dicts.
+
+        Args:
+            offset: 0-based start position (default 0).
+            limit:  Maximum number of lines to return.  ``None`` returns all.
+        """
         doc = self._documents[doc_id]
         detector = self._conflict_detectors.get(doc_id)
-        return [self._serialize_line(i, line, detector, doc) for i, line in enumerate(doc.lines)]
+        lines = doc.lines[offset : offset + limit if limit is not None else None]
+        return [
+            self._serialize_line(offset + i, line, detector, doc)
+            for i, line in enumerate(lines)
+        ]
 
     def get_line(self, doc_id: str, position: int) -> dict:
         doc = self._documents[doc_id]
@@ -76,35 +89,18 @@ class DocumentService:
     # Edit flow
     # ------------------------------------------------------------------
 
-    def start_edit(self, doc_id: str, position: int) -> dict:
+    def hydrate_session(
+        self, doc_id: str, position: int, fields: Optional[dict] = None,
+    ) -> dict:
         """
-        Begin editing a line: start a controller session, hydrate from
-        existing data, return the editable fields as JSON.
-        """
-        doc = self._documents[doc_id]
-        line = doc[position]
-        line_id = line.line_id
-        ctrl = self._controllers[doc.doc_type]
+        Start or update an edit session for a line.
 
-        ctrl.start_session(line_id)
+        If *fields* is ``None`` the session is hydrated from the line's
+        existing data (user clicked "Edit").  Otherwise the incoming
+        dict is converted to typed LineData and loaded into the
+        controller (UI "Apply" for AF, or any field-based update).
 
-        if line.data is not None:
-            ctrl.from_line_data(line.data)
-
-        line_data = ctrl.to_line_data()
-        return {
-            "position": position,
-            "doc_type": doc.doc_type.value,
-            "data": dataclasses.asdict(line_data),
-        }
-
-    def update_session(self, doc_id: str, position: int, fields: dict) -> dict:
-        """
-        Update the active edit session with new field values.
-
-        Works for any document type: builds typed LineData from the
-        incoming dict and hydrates the controller.  Does **not** commit
-        to the document — call :meth:`commit_edit` for that.
+        Does **not** commit — call :meth:`commit_edit` for that.
         """
         doc = self._documents[doc_id]
         line = doc[position]
@@ -112,14 +108,18 @@ class DocumentService:
 
         ctrl.start_session(line.line_id)
 
-        line_data = self._dict_to_line_data(doc.doc_type, fields)
-        ctrl.from_line_data(line_data)
+        if fields is not None:
+            line_data = self._dict_to_line_data(doc.doc_type, fields)
+            ctrl.from_line_data(line_data)
+        elif line.data is not None:
+            ctrl.from_line_data(line.data)
 
+        handler = get_handler(doc.doc_type)
         current_data = ctrl.to_line_data()
         return {
             "position": position,
             "doc_type": doc.doc_type.value,
-            "data": dataclasses.asdict(current_data),
+            "data": handler.to_json(current_data),
         }
 
     def commit_edit(self, doc_id: str, position: int) -> dict:
@@ -139,11 +139,9 @@ class DocumentService:
         # Get the serialised data back from the controller
         committed_data = ctrl.to_line_data()
 
-        # Serialize to raw text
-        if doc.doc_type == DocumentType.AF:
-            raw = af_serializer.serialize(committed_data)
-        else:
-            raw = mutex_serializer.serialize(committed_data)
+        # Serialize to raw text via the registry handler
+        handler = get_handler(doc.doc_type)
+        raw = handler.serialize(committed_data)
 
         new_line = DocumentLine(
             line_id=line_id,
@@ -159,6 +157,33 @@ class DocumentService:
             detector.update_line(line_id, committed_data)
 
         return self._serialize_line(position, new_line, detector, doc)
+
+    # ------------------------------------------------------------------
+    # Line insertion / deletion
+    # ------------------------------------------------------------------
+
+    def delete_line(self, doc_id: str, position: int) -> dict:
+        """Delete a line by its 0-based position. Returns the updated summary."""
+        doc = self._documents[doc_id]
+        line = doc[position]
+
+        # Remove from conflict detection first
+        detector = self._conflict_detectors.get(doc_id)
+        if detector is not None:
+            detector.remove_line(line.line_id)
+
+        doc.remove_line(line.line_id)
+        return self._document_summary(doc_id, doc)
+
+    def insert_blank_line(self, doc_id: str, position: int) -> dict:
+        """Insert an empty line at *position*. Returns ``{"position": int}``."""
+        doc = self._documents[doc_id]
+        new_line = DocumentLine(
+            raw_text="",
+            validation_result=ValidationResult(status=LineStatus.OK),
+        )
+        doc.insert_line(position, new_line)
+        return {"position": position}
 
     # ------------------------------------------------------------------
     # Save
@@ -186,43 +211,43 @@ class DocumentService:
     # Mutex interactive session
     # ------------------------------------------------------------------
 
-    def mutex_add_mutexed(self, doc_id: str, position: int,
+    def mutex_add_mutexed(self, doc_id: str,
                           template: Optional[str], net_pattern: str,
                           is_regex: bool) -> dict:
         ctrl = self._require_mutex_ctrl(doc_id)
         ctrl.add_mutexed(template, net_pattern, is_regex)
         return self._serialize_mutex_session(ctrl)
 
-    def mutex_add_active(self, doc_id: str, position: int,
+    def mutex_add_active(self, doc_id: str,
                          template: Optional[str], net_name: str) -> dict:
         ctrl = self._require_mutex_ctrl(doc_id)
         ctrl.add_active(template, net_name)
         return self._serialize_mutex_session(ctrl)
 
-    def mutex_remove_mutexed(self, doc_id: str, position: int,
+    def mutex_remove_mutexed(self, doc_id: str,
                              template: Optional[str], net_pattern: str,
                              is_regex: bool) -> dict:
         ctrl = self._require_mutex_ctrl(doc_id)
         ctrl.remove_mutexed(template, net_pattern, is_regex)
         return self._serialize_mutex_session(ctrl)
 
-    def mutex_remove_active(self, doc_id: str, position: int,
+    def mutex_remove_active(self, doc_id: str,
                             template: Optional[str], net_name: str) -> dict:
         ctrl = self._require_mutex_ctrl(doc_id)
         ctrl.remove_active(template, net_name)
         return self._serialize_mutex_session(ctrl)
 
-    def mutex_set_fev(self, doc_id: str, position: int, fev: str) -> dict:
+    def mutex_set_fev(self, doc_id: str, fev: str) -> dict:
         ctrl = self._require_mutex_ctrl(doc_id)
         ctrl.set_fev_mode(FEVMode(fev) if fev else FEVMode.EMPTY)
         return self._serialize_mutex_session(ctrl)
 
-    def mutex_set_num_active(self, doc_id: str, position: int, value: int) -> dict:
+    def mutex_set_num_active(self, doc_id: str, value: int) -> dict:
         ctrl = self._require_mutex_ctrl(doc_id)
         ctrl.set_num_active(value)
         return self._serialize_mutex_session(ctrl)
 
-    def get_mutex_session(self, doc_id: str, position: int) -> dict:
+    def get_mutex_session(self, doc_id: str) -> dict:
         ctrl = self._require_mutex_ctrl(doc_id)
         return self._serialize_mutex_session(ctrl)
 
@@ -266,11 +291,8 @@ class DocumentService:
             info = detector.get_conflict_info(line.line_id)
             if info is not None:
                 status = LineStatus.CONFLICT.value
-                # Convert integer canonical net IDs to human-readable names
-                shared_nets = sorted(
-                    detector.canonical_net_name(nid) or f"net#{nid}"
-                    for nid in info.shared_net_ids
-                )
+                # Net names are already human-readable strings
+                shared_nets = sorted(info.shared_net_ids)
                 # Translate internal line_ids to 0-based positions for the frontend
                 conflicting_positions = sorted(
                     doc.get_position(lid)
@@ -291,40 +313,18 @@ class DocumentService:
             "conflict_info": conflict_info,
         }
         if line.data is not None:
-            result["data"] = dataclasses.asdict(line.data)
-            # Serialize FEVMode enum to string for JSON
-            if isinstance(line.data, MutexLineData):
-                result["data"]["fev"] = line.data.fev.value
+            handler = get_handler(doc.doc_type) if doc is not None else None
+            if handler is not None:
+                result["data"] = handler.to_json(line.data)
+            else:
+                result["data"] = dataclasses.asdict(line.data)
         return result
 
     @staticmethod
-    def _dict_to_line_data(doc_type: DocumentType, fields: dict) -> LineData:
+    def _dict_to_line_data(doc_type: DocumentType, fields: dict) -> HasNetSpecs:
         """Convert a raw JSON dict into the appropriate typed LineData."""
-        if doc_type == DocumentType.AF:
-            return AfLineData(
-                template=fields.get("template", ""),
-                net=fields.get("net", ""),
-                af_value=float(fields.get("af_value", 0.0)),
-                is_template_regex=bool(fields.get("is_template_regex", False)),
-                is_net_regex=bool(fields.get("is_net_regex", False)),
-                is_em_enabled=bool(fields.get("is_em_enabled", False)),
-                is_sh_enabled=bool(fields.get("is_sh_enabled", False)),
-                is_sch_enabled=bool(fields.get("is_sch_enabled", False)),
-            )
-        elif doc_type == DocumentType.MUTEX:
-            fev_raw = fields.get("fev", "")
-            template = fields.get("template")
-            if template == "":
-                template = None
-            return MutexLineData(
-                num_active=int(fields.get("num_active", 1)),
-                fev=FEVMode(fev_raw) if fev_raw else FEVMode.EMPTY,
-                is_regexp=bool(fields.get("is_regexp", False)),
-                template=template,
-                mutexed_nets=fields.get("mutexed_nets", []),
-                active_nets=fields.get("active_nets", []),
-            )
-        raise ValueError(f"Unknown document type: {doc_type}")
+        handler = get_handler(doc_type)
+        return handler.from_dict(fields)
 
     def _require_mutex_ctrl(self, doc_id: str) -> MutexEditController:
         doc = self._documents[doc_id]

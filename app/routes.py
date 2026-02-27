@@ -39,7 +39,7 @@ class LoadRequest(BaseModel):
 
 
 class EditRequest(BaseModel):
-    fields: dict
+    fields: Optional[dict] = None
 
 
 class SaveRequest(BaseModel):
@@ -98,10 +98,10 @@ def list_documents():
 
 
 @router.get("/documents/{doc_id}/lines")
-def get_lines(doc_id: str):
-    """Get all lines in a document."""
+def get_lines(doc_id: str, offset: int = 0, limit: Optional[int] = None):
+    """Get lines in a document (supports pagination via *offset* / *limit*)."""
     try:
-        return svc().get_lines(doc_id)
+        return svc().get_lines(doc_id, offset=offset, limit=limit)
     except KeyError:
         raise HTTPException(404, f"Document not found: {doc_id}")
 
@@ -115,20 +115,37 @@ def get_line(doc_id: str, position: int):
         raise HTTPException(404, "Document or line not found")
 
 
-@router.post("/documents/{doc_id}/lines/{position}/edit")
-def start_edit(doc_id: str, position: int):
-    """Start editing a line — returns editable fields."""
+@router.delete("/documents/{doc_id}/lines/{position}")
+def delete_line(doc_id: str, position: int):
+    """Delete a line by its 0-based position."""
     try:
-        return svc().start_edit(doc_id, position)
+        return svc().delete_line(doc_id, position)
     except (KeyError, IndexError):
         raise HTTPException(404, "Document or line not found")
+    except Exception as e:
+        raise HTTPException(422, str(e))
+
+
+@router.post("/documents/{doc_id}/lines/{position}/insert")
+def insert_line(doc_id: str, position: int):
+    """Insert a blank line at the given 0-based position."""
+    try:
+        return svc().insert_blank_line(doc_id, position)
+    except (KeyError, IndexError):
+        raise HTTPException(404, "Document or line not found")
+    except Exception as e:
+        raise HTTPException(422, str(e))
 
 
 @router.put("/documents/{doc_id}/lines/{position}/session")
-def update_session(doc_id: str, position: int, req: EditRequest):
-    """Update the active edit session with new field values (any doc type)."""
+def hydrate_session(doc_id: str, position: int, req: EditRequest):
+    """Start or update an edit session.
+
+    Send ``{ "fields": null }`` (or omit *fields*) to load the line's
+    current data.  Send ``{ "fields": { ... } }`` to apply new values.
+    """
     try:
-        return svc().update_session(doc_id, position, req.fields)
+        return svc().hydrate_session(doc_id, position, req.fields)
     except (KeyError, IndexError):
         raise HTTPException(404, "Document or line not found")
     except Exception as e:
@@ -181,7 +198,7 @@ def query_nets(req: QueryNetsRequest):
 def get_mutex_session(doc_id: str, position: int):
     """Get current mutex edit session state."""
     try:
-        return svc().get_mutex_session(doc_id, position)
+        return svc().get_mutex_session(doc_id)
     except (KeyError, IndexError):
         raise HTTPException(404, "Document or line not found")
     except Exception as e:
@@ -193,7 +210,7 @@ def mutex_add_mutexed(doc_id: str, position: int, req: MutexEntryRequest):
     """Add a net pattern to the mutexed set via the controller."""
     try:
         return svc().mutex_add_mutexed(
-            doc_id, position, req.template, req.net_pattern, req.is_regex,
+            doc_id, req.template, req.net_pattern, req.is_regex,
         )
     except Exception as e:
         raise HTTPException(422, str(e))
@@ -204,7 +221,7 @@ def mutex_add_active(doc_id: str, position: int, req: MutexActiveRequest):
     """Add a net directly to the active (and mutexed) set."""
     try:
         return svc().mutex_add_active(
-            doc_id, position, req.template, req.net_name,
+            doc_id, req.template, req.net_name,
         )
     except Exception as e:
         raise HTTPException(422, str(e))
@@ -215,7 +232,7 @@ def mutex_remove_mutexed(doc_id: str, position: int, req: MutexEntryRequest):
     """Remove a net pattern from the mutexed set."""
     try:
         return svc().mutex_remove_mutexed(
-            doc_id, position, req.template, req.net_pattern, req.is_regex,
+            doc_id, req.template, req.net_pattern, req.is_regex,
         )
     except Exception as e:
         raise HTTPException(422, str(e))
@@ -226,7 +243,7 @@ def mutex_remove_active(doc_id: str, position: int, req: MutexActiveRequest):
     """Remove a net from the active set."""
     try:
         return svc().mutex_remove_active(
-            doc_id, position, req.template, req.net_name,
+            doc_id, req.template, req.net_name,
         )
     except Exception as e:
         raise HTTPException(422, str(e))
@@ -236,7 +253,7 @@ def mutex_remove_active(doc_id: str, position: int, req: MutexActiveRequest):
 def mutex_set_fev(doc_id: str, position: int, req: MutexFevRequest):
     """Set FEV mode on the mutex session."""
     try:
-        return svc().mutex_set_fev(doc_id, position, req.fev)
+        return svc().mutex_set_fev(doc_id, req.fev)
     except Exception as e:
         raise HTTPException(422, str(e))
 
@@ -245,7 +262,7 @@ def mutex_set_fev(doc_id: str, position: int, req: MutexFevRequest):
 def mutex_set_num_active(doc_id: str, position: int, req: MutexNumActiveRequest):
     """Set num_active on the mutex session (only when active list is empty)."""
     try:
-        return svc().mutex_set_num_active(doc_id, position, req.value)
+        return svc().mutex_set_num_active(doc_id, req.value)
     except Exception as e:
         raise HTTPException(422, str(e))
 

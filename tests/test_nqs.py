@@ -194,85 +194,78 @@ class TestConflictDetectorIntegration:
 
     def test_top_cell_net_resolves(self, nqs):
         det = ConflictDetector(nqs)
-        ids = det.resolve_to_canonical_ids(None, "in1", False, False)
-        assert len(ids) == 1
-        nid = next(iter(ids))
-        assert det.canonical_net_name(nid) == "in1"
+        ids = det.resolve_to_canonical_names(None, "in1", False, False)
+        assert ids == frozenset({"in1"})
 
     def test_alias_resolves_to_canonical(self, nqs):
         det = ConflictDetector(nqs)
-        ids = det.resolve_to_canonical_ids(None, "ia1/ib/n1", False, False)
-        assert len(ids) == 1
-        nid = next(iter(ids))
-        assert det.canonical_net_name(nid) == "in1"
+        ids = det.resolve_to_canonical_names(None, "ia1/ib/n1", False, False)
+        assert ids == frozenset({"in1"})
 
     def test_template_net_resolves_through_hierarchy(self, nqs):
         det = ConflictDetector(nqs)
-        ids = det.resolve_to_canonical_ids("d", "n3", False, False)
-        assert len(ids) > 0
-        id_names = {det.canonical_net_name(nid) for nid in ids}
-        assert "in1" in id_names
+        ids = det.resolve_to_canonical_names("d", "n3", False, False)
+        assert "in1" in ids
 
     def test_hierarchical_conflict_d_n3_vs_c_n2(self, nqs):
         det = ConflictDetector(nqs)
-        d_ids = det.resolve_to_canonical_ids("d", "n3", False, False)
-        c_ids = det.resolve_to_canonical_ids("c", "n2", False, False)
+        d_ids = det.resolve_to_canonical_names("d", "n3", False, False)
+        c_ids = det.resolve_to_canonical_names("c", "n2", False, False)
         assert d_ids & c_ids, "d:n3 and c:n2 should share at least one top-cell net"
 
     def test_hierarchical_conflict_d_n3_vs_top_in1(self, nqs):
         det = ConflictDetector(nqs)
-        d_ids = det.resolve_to_canonical_ids("d", "n3", False, False)
-        top_ids = det.resolve_to_canonical_ids(None, "in1", False, False)
+        d_ids = det.resolve_to_canonical_names("d", "n3", False, False)
+        top_ids = det.resolve_to_canonical_names(None, "in1", False, False)
         assert d_ids & top_ids, "d:n3 should conflict with top-cell in1"
 
     def test_no_conflict_between_unrelated_nets(self, nqs):
         det = ConflictDetector(nqs)
-        d_gd1_ids = det.resolve_to_canonical_ids("d", "gd1", False, False)
-        in2_ids = det.resolve_to_canonical_ids(None, "in2", False, False)
+        d_gd1_ids = det.resolve_to_canonical_names("d", "gd1", False, False)
+        in2_ids = det.resolve_to_canonical_names(None, "in2", False, False)
         assert not (d_gd1_ids & in2_ids)
 
     def test_regex_resolves(self, nqs):
         det = ConflictDetector(nqs)
-        ids = det.resolve_to_canonical_ids("d", "n.*", False, True)
+        ids = det.resolve_to_canonical_names("d", "n.*", False, True)
         assert len(ids) > 0
 
     def test_empty_net_returns_empty(self, nqs):
         det = ConflictDetector(nqs)
-        assert det.resolve_to_canonical_ids(None, "", False, False) == frozenset()
+        assert det.resolve_to_canonical_names(None, "", False, False) == frozenset()
 
     def test_nonexistent_template_returns_empty(self, nqs):
         det = ConflictDetector(nqs)
-        assert det.resolve_to_canonical_ids("nosuch", "n1", False, False) == frozenset()
+        assert det.resolve_to_canonical_names("nosuch", "n1", False, False) == frozenset()
 
     def test_nonexistent_net_returns_empty(self, nqs):
         det = ConflictDetector(nqs)
-        assert det.resolve_to_canonical_ids("d", "nonexistent", False, False) == frozenset()
+        assert det.resolve_to_canonical_names("d", "nonexistent", False, False) == frozenset()
 
     def test_consistency_with_find_net_instance_names(self, nqs):
-        """Integer IDs should map back to exactly the instance names."""
+        """Resolved names should match the instance names from NQS."""
         det = ConflictDetector(nqs)
         names = nqs.find_net_instance_names("d", "n3")
-        ids = det.resolve_to_canonical_ids("d", "n3", False, False)
-        id_names = {det.canonical_net_name(nid) for nid in ids}
-        assert id_names == names
+        ids = det.resolve_to_canonical_names("d", "n3", False, False)
+        assert ids == names
 
     def test_hierarchy_cache_populated(self, nqs):
         """Verify the unbounded hierarchy cache is populated after resolution."""
         det = ConflictDetector(nqs)
-        info_before = det._resolve_tpl_net_to_top_ids.cache_info()
+        info_before = det._resolve_tpl_net_to_top_names.cache_info()
 
-        det.resolve_to_canonical_ids("d", "n3", False, False)
-        info_after = det._resolve_tpl_net_to_top_ids.cache_info()
+        det.resolve_to_canonical_names("d", "n3", False, False)
+        info_after = det._resolve_tpl_net_to_top_names.cache_info()
         assert info_after.currsize > info_before.currsize
 
     def test_repeated_calls_hit_cache(self, nqs):
         """Second call should hit the hierarchy cache."""
         det = ConflictDetector(nqs)
-        det.resolve_to_canonical_ids("d", "n3", False, False)
-        info1 = det._resolve_tpl_net_to_top_ids.cache_info()
+        det.resolve_to_canonical_names("d", "n3", False, False)
+        info1 = det._resolve_tpl_net_to_top_names.cache_info()
 
         # Clear the outer resolve cache so it re-enters the method
-        det.resolve_to_canonical_ids.cache_clear()
-        det.resolve_to_canonical_ids("d", "n3", False, False)
-        info2 = det._resolve_tpl_net_to_top_ids.cache_info()
+        det.resolve_to_canonical_names.cache_clear()
+        det.resolve_to_canonical_names("d", "n3", False, False)
+        info2 = det._resolve_tpl_net_to_top_names.cache_info()
         assert info2.hits > info1.hits

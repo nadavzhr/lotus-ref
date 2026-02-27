@@ -2,17 +2,13 @@
 ConflictStore — efficient conflict detection between document lines.
 
 A conflict occurs when two or more lines resolve to overlapping sets
-of canonical net IDs (integers).  The store maintains two indexes for
+of canonical net names (strings).  The store maintains two indexes for
 close-to-O(1) lookups:
 
-- ``_line_nets[line_id]``  → frozenset of canonical net IDs
-- ``_net_lines[net_id]``   → set of line_ids that cover that net
+- ``_line_nets[line_id]``  → frozenset of canonical net names
+- ``_net_lines[net_name]`` → set of line_ids that cover that net
 
-Canonical net IDs are integers assigned by the ConflictDetector at startup.
-String names are stored once and resolved only for UI display, keeping the
-core indexes compact and cache-friendly.
-
-ConflictDetector owns both the ID mapping and the ConflictStore.
+ConflictDetector owns a ConflictStore and an NQS reference.
 It supports efficient incremental updates:
 
 * **Edit line X** — resolve the new nets for X and call
@@ -47,30 +43,32 @@ from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from core.document_line import DocumentLine
-    from core.interfaces import INetlistQueryService
+    from core.interfaces import HasNetSpecs, INetlistQueryService
+
+__all__ = ["ConflictStore", "ConflictInfo", "ConflictDetector"]
 
 
 class ConflictStore:
     """
-    Maintains a bidirectional index of line ↔ canonical-net-ID
+    Maintains a bidirectional index of line ↔ canonical net name
     relationships and exposes efficient conflict queries.
     """
 
     __slots__ = ("_line_nets", "_net_lines")
 
     def __init__(self) -> None:
-        # line_id → frozenset of canonical net IDs (integers)
-        self._line_nets: dict[str, frozenset[int]] = {}
-        # canonical_net_id → set of line_ids
-        self._net_lines: dict[int, set[str]] = {}
+        # line_id → frozenset of canonical net names (strings)
+        self._line_nets: dict[str, frozenset[str]] = {}
+        # canonical_net_name → set of line_ids
+        self._net_lines: dict[str, set[str]] = {}
 
     # ------------------------------------------------------------------
     # Mutations
     # ------------------------------------------------------------------
 
-    def update_line(self, line_id: str, nets: set[int] | frozenset[int]) -> None:
+    def update_line(self, line_id: str, nets: set[str] | frozenset[str]) -> None:
         """
-        Set (or replace) the canonical net IDs for *line_id*.
+        Set (or replace) the canonical net names for *line_id*.
 
         If the line already existed, its old nets are first removed from
         the reverse index, then the new nets are inserted.
@@ -87,7 +85,7 @@ class ConflictStore:
         for net in new_nets:
             self._net_lines.setdefault(net, set()).add(line_id)
 
-    def build_from_lines(self, line_nets: dict[str, frozenset[int]]) -> None:
+    def build_from_lines(self, line_nets: dict[str, frozenset[str]]) -> None:
         """
         Build both indexes from scratch in a single pass.
 
@@ -96,7 +94,7 @@ class ConflictStore:
         overhead — both indexes start empty.
         """
         self._line_nets = {lid: nets for lid, nets in line_nets.items() if nets}
-        net_lines: dict[int, set[str]] = {}
+        net_lines: dict[str, set[str]] = {}
         for line_id, nets in self._line_nets.items():
             for net in nets:
                 net_lines.setdefault(net, set()).add(line_id)
@@ -140,12 +138,12 @@ class ConflictStore:
         result.discard(line_id)
         return result
 
-    def get_conflicting_net_ids(self, line_id: str) -> frozenset[int]:
-        """Return the canonical net IDs that *line_id* shares with at least one other line."""
+    def get_conflicting_net_ids(self, line_id: str) -> frozenset[str]:
+        """Return the canonical net names that *line_id* shares with at least one other line."""
         nets = self._line_nets.get(line_id)
         if not nets:
             return frozenset()
-        result: set[int] = set()
+        result: set[str] = set()
         for net in nets:
             owners = self._net_lines.get(net)
             if owners and len(owners) > 1:
@@ -184,7 +182,7 @@ class ConflictStore:
 class ConflictInfo:
     """Lightweight snapshot of conflict data for a single line."""
     conflicting_line_ids: set[str]
-    shared_net_ids: frozenset[int]
+    shared_net_ids: frozenset[str]
 
 
 # ------------------------------------------------------------------
@@ -197,9 +195,9 @@ class ConflictDetector:
 
     It holds a reference to an :class:`INetlistQueryService` but never
     mutates it.  The service remains completely unaware of conflicts;
-    it only answers queries.  The detector translates those query
-    results into integer canonical-net-ID sets and maintains the
-    bidirectional index via :class:`ConflictStore`.
+    it only answers queries.  The detector translates query results into
+    canonical net name sets and maintains the bidirectional index via
+    :class:`ConflictStore`.
 
     Incremental updates
     -------------------
@@ -223,10 +221,10 @@ class ConflictDetector:
 
     Performance
     -----------
-    * The (template, canonical_net) → top-cell-IDs mapping is resolved
+    * The (template, canonical_net) → top-cell names mapping is resolved
       lazily with an unbounded cache.  Each unique pair is traversed
       through the hierarchy exactly once for the lifetime of the detector.
-    * ``resolve_to_canonical_ids`` has a fast path for the common case
+    * ``resolve_to_canonical_names`` has a fast path for the common case
       (exact template, exact net, no regex/bus): pure in-memory lookups
       with no SQL involved.
     * Full rebuilds use :meth:`ConflictStore.build_from_lines` to
@@ -237,55 +235,36 @@ class ConflictDetector:
         self._nqs = nqs
         self._store = ConflictStore()
         self._top_cell = nqs.get_top_cell()
-        self._build_id_table()
-
-    # ------------------------------------------------------------------
-    # ID table — maps top-cell canonical net names ↔ integers
-    # ------------------------------------------------------------------
-
-    def _build_id_table(self) -> None:
-        top_nets = sorted(self._nqs.get_all_nets_in_template(self._top_cell))
-        self._net_id_map: dict[str, int] = {
-            name: i for i, name in enumerate(top_nets)
-        }
-        self._id_net_map: dict[int, str] = dict(enumerate(top_nets))
-
-    def canonical_net_name(self, net_id: int) -> Optional[str]:
-        """Return the human-readable net name for an integer ID."""
-        return self._id_net_map.get(net_id)
 
     # ------------------------------------------------------------------
     # Hierarchy cache — resolved lazily, never evicted
     # ------------------------------------------------------------------
 
     @lru_cache(maxsize=None)
-    def _resolve_tpl_net_to_top_ids(self, tpl: str, net: str) -> frozenset[int]:
+    def _resolve_tpl_net_to_top_names(self, tpl: str, net: str) -> frozenset[str]:
         """
-        Map a single (template, canonical_net) to top-cell integer IDs.
+        Map a single (template, canonical_net) to top-cell net names.
 
         Uses ``find_net_instance_names`` to walk the hierarchy, then
-        maps the resulting top-cell names to integer IDs.  Cached with
-        no size limit so each pair is resolved at most once.
+        returns the resulting top-cell names.  Cached with no size limit
+        so each pair is resolved at most once.
         """
-        names = self._nqs.find_net_instance_names(tpl, net)
-        return frozenset(
-            self._net_id_map[n] for n in names if n in self._net_id_map
-        )
+        return frozenset(self._nqs.find_net_instance_names(tpl, net))
 
     # ------------------------------------------------------------------
-    # Resolution — pattern → frozenset[int]
+    # Resolution — pattern → frozenset[str]
     # ------------------------------------------------------------------
 
     @lru_cache(maxsize=512)
-    def resolve_to_canonical_ids(
+    def resolve_to_canonical_names(
         self,
         template: Optional[str],
         net_name: str,
         template_regex: bool,
         net_regex: bool,
-    ) -> frozenset[int]:
+    ) -> frozenset[str]:
         """
-        Resolve a template/net pattern to top-cell canonical net IDs.
+        Resolve a template/net pattern to top-cell canonical net names.
 
         Fast path (exact template + exact net, ~99 % of calls):
             1. In-memory set membership for template     — O(1)
@@ -308,15 +287,15 @@ class ConflictDetector:
         if not matching_templates:
             return frozenset()
 
-        result_ids: set[int] = set()
+        result_names: set[str] = set()
 
         if not net_regex and not nqs.has_bus_notation(net_norm):
             # ── Fast path: exact match — pure in-memory lookups ──
             for tpl in matching_templates:
                 canonical = nqs.get_canonical_net_name(net_norm, tpl)
                 if canonical:
-                    result_ids.update(
-                        self._resolve_tpl_net_to_top_ids(tpl, canonical)
+                    result_names.update(
+                        self._resolve_tpl_net_to_top_names(tpl, canonical)
                     )
         else:
             # ── Slow path: regex / bus — delegate pattern expansion to NQS ──
@@ -328,45 +307,38 @@ class ConflictDetector:
                     tpl, net = qualified_net.split(":", 1)
                 else:
                     tpl, net = self._top_cell, qualified_net
-                result_ids.update(
-                    self._resolve_tpl_net_to_top_ids(tpl, net)
+                result_names.update(
+                    self._resolve_tpl_net_to_top_names(tpl, net)
                 )
 
-        return frozenset(result_ids)
+        return frozenset(result_names)
 
     # ------------------------------------------------------------------
     # Line resolution helpers
     # ------------------------------------------------------------------
 
-    def resolve_line_nets(self, data) -> frozenset[int]:
+    def resolve_line_nets(self, data: HasNetSpecs) -> frozenset[str]:
         """
-        Resolve the set of top-cell canonical net IDs that a line's
+        Resolve the set of top-cell canonical net names that a line's
         data covers.
 
-        *data* may be an :class:`AfLineData` or :class:`MutexLineData`.
-        Returns a frozenset of integer canonical net IDs.
+        *data* must expose a ``net_specs()`` method returning a list of
+        :class:`NetSpec` instances.  Returns a frozenset of canonical
+        net name strings.
         """
-        from doc_types.af.line_data import AfLineData
-        from doc_types.mutex.line_data import MutexLineData
+        specs = getattr(data, "net_specs", None)
+        if specs is None:
+            return frozenset()
 
-        if isinstance(data, AfLineData):
-            return self.resolve_to_canonical_ids(
-                data.template, data.net,
-                data.is_template_regex, data.is_net_regex,
-            )
-
-        if isinstance(data, MutexLineData):
-            all_ids: set[int] = set()
-            for net in data.mutexed_nets:
-                all_ids.update(
-                    self.resolve_to_canonical_ids(
-                        data.template, net,
-                        False, data.is_regexp,
-                    )
+        all_names: set[str] = set()
+        for spec in specs():
+            all_names.update(
+                self.resolve_to_canonical_names(
+                    spec.template, spec.net,
+                    spec.is_template_regex, spec.is_net_regex,
                 )
-            return frozenset(all_ids)
-
-        return frozenset()
+            )
+        return frozenset(all_names)
 
     # ------------------------------------------------------------------
     # Full rebuild (initial load only)
@@ -383,7 +355,7 @@ class ConflictDetector:
         Uses :meth:`ConflictStore.build_from_lines` for a single-pass
         batch build (no per-line remove-from-index overhead).
         """
-        line_nets: dict[str, frozenset[int]] = {}
+        line_nets: dict[str, frozenset[str]] = {}
         for line in lines:
             if line.data is not None:
                 nets = self.resolve_line_nets(line.data)
@@ -395,11 +367,11 @@ class ConflictDetector:
     # Incremental updates
     # ------------------------------------------------------------------
 
-    def update_line(self, line_id: str, data) -> None:
+    def update_line(self, line_id: str, data: HasNetSpecs | None) -> None:
         """
         Incrementally update conflict state after editing *line_id*.
 
-        Resolves the new canonical net IDs from *data* and updates the
+        Resolves the new canonical net names from *data* and updates the
         store's bidirectional index.  Because conflict queries read the
         live index, all ``is_conflicting`` / ``get_conflict_info`` calls
         for **every** line immediately reflect the change.
@@ -436,7 +408,7 @@ class ConflictDetector:
     def get_conflicting_lines(self, line_id: str) -> set[str]:
         return self._store.get_conflicting_lines(line_id)
 
-    def get_conflicting_net_ids(self, line_id: str) -> frozenset[int]:
+    def get_conflicting_net_ids(self, line_id: str) -> frozenset[str]:
         return self._store.get_conflicting_net_ids(line_id)
 
     def get_conflict_info(self, line_id: str) -> Optional[ConflictInfo]:

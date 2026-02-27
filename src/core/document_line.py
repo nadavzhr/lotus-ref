@@ -9,26 +9,16 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from typing import Union, TYPE_CHECKING
 
+from core.interfaces import HasNetSpecs
 from core.line_status import LineStatus
 from core.validation_result import ValidationResult
 
-if TYPE_CHECKING:
-    from doc_types.af.line_data import AfLineData
-    from doc_types.mutex.line_data import MutexLineData
 
-    LineData = Union[AfLineData, MutexLineData]
-else:
-    # At runtime keep a lightweight protocol so isinstance() isn't needed
-    # but static analysers still see the Union above.
-    LineData = object
-
-
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class DocumentLine:
     """
-    Immutable-ish representation of one line in a document.
+    Immutable representation of one line in a document.
 
     Attributes:
         line_id:           Internal stable UUID used by the backend for
@@ -43,7 +33,7 @@ class DocumentLine:
     """
     line_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     raw_text: str = ""
-    data: LineData | None = None
+    data: HasNetSpecs | None = None
     validation_result: ValidationResult = field(default_factory=ValidationResult)
 
     @property

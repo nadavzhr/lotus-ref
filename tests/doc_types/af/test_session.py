@@ -1,11 +1,11 @@
 import pytest
 
-from doc_types.af import AFEditSessionState
+from doc_types.af import AfEditSessionState
 
 
 @pytest.fixture
 def session():
-    return AFEditSessionState("s1")
+    return AfEditSessionState("s1")
 
 
 # ===========================================================

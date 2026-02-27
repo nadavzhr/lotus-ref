@@ -5,6 +5,8 @@ To add a new document type, add one ``register()`` call below.
 This module is imported (as a side-effect) by ``document_io``
 to ensure handlers are available before first use.
 """
+from __future__ import annotations
+
 from core.document_type import DocumentType
 from infrastructure.registry import register, DocumentTypeHandler
 
@@ -24,6 +26,8 @@ register(DocumentType.AF, DocumentTypeHandler(
     parse=af_parser.parse,
     serialize=af_serializer.serialize,
     validate=af_validator.validate,
+    from_dict=af_serializer.from_dict,
+    to_json=af_serializer.to_json,
 ))
 
 # ---- Mutex ----
@@ -33,4 +37,6 @@ register(DocumentType.MUTEX, DocumentTypeHandler(
     parse=mutex_parser.parse,
     serialize=mutex_serializer.serialize,
     validate=mutex_validator.validate,
+    from_dict=mutex_serializer.from_dict,
+    to_json=mutex_serializer.to_json,
 ))

@@ -160,7 +160,7 @@
   .line-messages .err { color: var(--red); }
   .line-messages .warn { color: var(--yellow); }
 
-  .edit-col { width: 60px; text-align: center; }
+  .edit-col { width: 120px; text-align: center; white-space: nowrap; }
   .edit-btn {
     background: var(--surface2);
     color: var(--lavender);
@@ -172,6 +172,20 @@
     font-family: inherit;
   }
   .edit-btn:hover { background: var(--overlay); }
+  .action-btn {
+    background: var(--surface2);
+    color: var(--subtext);
+    border: 1px solid var(--overlay);
+    padding: 2px 7px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 11px;
+    font-family: inherit;
+    margin-left: 3px;
+  }
+  .action-btn:hover { background: var(--overlay); }
+  .action-btn.del:hover { background: var(--red); color: var(--bg); }
+  .action-btn.ins:hover { background: var(--teal); color: var(--bg); }
 
   /* --- Edit panel --- */
   .edit-panel {
@@ -379,6 +393,7 @@
   <div id="doc-view" class="hidden">
     <div id="doc-toolbar">
       <h2 id="doc-title"></h2>
+      <button class="teal-btn" onclick="insertLineAt(0)" title="Insert a new line at the top">+ New Line</button>
       <button class="save-btn" onclick="saveDoc()">💾 Save</button>
     </div>
     <div id="status-bar" class="status-bar"></div>
@@ -401,7 +416,7 @@
           <th>Status</th>
           <th>Raw Text</th>
           <th>Messages</th>
-          <th></th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody id="lines-body"></tbody>
@@ -510,26 +525,78 @@ function renderLines(lines) {
       msgs.push(`<span style="color:var(--purple)">⚡ Conflicts with line${line.conflict_info.conflicting_positions.length > 1 ? 's' : ''} ${esc(otherLines)} (shared: ${esc(nets)})</span>`);
     }
 
-    const editBtn = line.has_data
-      ? `<button class="edit-btn" onclick="startEdit(${line.position})">Edit</button>`
+    const editBtn = line.status !== 'comment'
+      ? `<button class="edit-btn" onclick="startEdit(${line.position})" title="Edit this line">Edit</button>`
       : '';
+    const insBtn = `<button class="action-btn ins" onclick="insertLineAt(${line.position + 1})" title="Insert new line below">+</button>`;
+    const delBtn = `<button class="action-btn del" onclick="deleteLine(${line.position})" title="Delete this line">×</button>`;
 
     return `<tr class="status-${line.status}">
       <td class="line-num">${line.position + 1}</td>
       <td class="line-status">${pillHtml(line.status)}</td>
       <td class="line-text">${esc(line.raw_text)}</td>
       <td class="line-messages">${msgs.join('<br>')}</td>
-      <td class="edit-col">${editBtn}</td>
+      <td class="edit-col">${editBtn}${insBtn}${delBtn}</td>
     </tr>`;
   }).join('');
+}
+
+// ---- Delete Line ----
+
+async function deleteLine(position) {
+  const line = linesData[position];
+  try {
+    const res = await fetch(
+      `${API}/documents/${currentDocId}/lines/${position}`,
+      { method: 'DELETE' }
+    );
+    if (!res.ok) {
+      const err = await res.json();
+      return alert(`Delete failed: ${err.detail || res.statusText}`);
+    }
+    // If the deleted line was being edited, close the panel
+    if (editingPosition === position) closeEdit();
+    // Adjust editing position if it was after the deleted line
+    else if (editingPosition !== null && editingPosition > position) editingPosition--;
+    await refreshLines();
+    // Update doc title line count
+    const titleEl = document.getElementById('doc-title');
+    titleEl.textContent = titleEl.textContent.replace(
+      /\(\d+ lines\)/, `(${linesData.length} lines)`
+    );
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+// ---- Insert Line ----
+
+async function insertLineAt(position) {
+  try {
+    const res = await fetch(
+      `${API}/documents/${currentDocId}/lines/${position}/insert`,
+      { method: 'POST' }
+    );
+    if (!res.ok) {
+      const err = await res.json();
+      return alert(`Insert failed: ${err.detail || res.statusText}`);
+    }
+    // Adjust editing position if it was at or after the insertion point
+    if (editingPosition !== null && editingPosition >= position) editingPosition++;
+    await refreshLines();
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
 }
 
 // ---- Edit Flow ----
 
 async function startEdit(position) {
   try {
-    const res = await fetch(`${API}/documents/${currentDocId}/lines/${position}/edit`, {
-      method: 'POST'
+    const res = await fetch(`${API}/documents/${currentDocId}/lines/${position}/session`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({fields: null})
     });
     if (!res.ok) return alert('Failed to start edit');
     const result = await res.json();
@@ -1057,7 +1124,7 @@ function gatherFields() {
       num_active: parseInt(document.getElementById('f-num_active')?.value || '1'),
       fev: document.getElementById('f-fev')?.value || '',
       template: normalizeTemplateInput(document.getElementById('f-template')?.value),
-      is_regexp: document.getElementById('f-is_regexp')?.checked || false,
+      is_net_regex: document.getElementById('f-is_net_regex')?.checked || false,
       mutexed_nets: mnRaw ? mnRaw.split(',').map(s => s.trim()).filter(Boolean) : [],
       active_nets: anRaw ? anRaw.split(',').map(s => s.trim()).filter(Boolean) : [],
     };

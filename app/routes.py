@@ -72,6 +72,11 @@ class MutexNumActiveRequest(BaseModel):
     value: int
 
 
+class SwapRequest(BaseModel):
+    pos_a: int
+    pos_b: int
+
+
 # ------------------------------------------------------------------
 # Endpoints
 # ------------------------------------------------------------------
@@ -167,6 +172,28 @@ def insert_line(doc_id: str, position: int):
         raise HTTPException(404, "Document or line not found")
     except Exception as e:
         raise HTTPException(422, str(e))
+
+
+@router.post("/documents/{doc_id}/lines/{position}/toggle-comment")
+def toggle_comment(doc_id: str, position: int):
+    """Toggle the comment state of a line (comment ↔ uncomment)."""
+    try:
+        return svc().toggle_comment(doc_id, position)
+    except (KeyError, IndexError):
+        raise HTTPException(404, "Document or line not found")
+    except Exception as e:
+        raise HTTPException(422, str(e))
+
+
+@router.post("/documents/{doc_id}/swap")
+def swap_lines(doc_id: str, req: SwapRequest):
+    """Swap two lines by 0-based position."""
+    try:
+        return svc().swap_lines(doc_id, req.pos_a, req.pos_b)
+    except KeyError:
+        raise HTTPException(404, f"Document not found: {doc_id}")
+    except (IndexError, ValueError) as e:
+        raise HTTPException(400, str(e))
 
 
 @router.put("/documents/{doc_id}/lines/{position}/session")

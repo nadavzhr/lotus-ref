@@ -22,7 +22,7 @@ from core.conflict_store import ConflictDetector
 from core.validation_result import ValidationResult
 from doc_types.af import AfEditController
 from doc_types.mutex import FEVMode, MutexEditController
-from infrastructure import load_document, save_document
+from infrastructure import load_document, save_document, parse_line
 from infrastructure.registry import get_handler
 
 logger = logging.getLogger(__name__)
@@ -259,6 +259,90 @@ class DocumentService:
         return {"position": position}
 
     # ------------------------------------------------------------------
+    # Swap lines
+    # ------------------------------------------------------------------
+
+    def swap_lines(self, doc_id: str, pos_a: int, pos_b: int) -> dict:
+        """Swap two lines by position. Returns an updated document summary.
+
+        Swaps change no net content so the conflict detector is unaffected —
+        conflicting *positions* are resolved lazily via ``doc.get_position()``
+        at serialization time.
+        """
+        doc = self._documents[doc_id]
+        doc.swap_lines(pos_a, pos_b)
+        logger.info("Swapped lines %d <-> %d in doc=%s", pos_a, pos_b, doc_id)
+        return self._document_summary(doc_id, doc)
+
+    # ------------------------------------------------------------------
+    # Toggle comment
+    # ------------------------------------------------------------------
+
+    _COMMENT_PREFIX = "# "
+
+    def toggle_comment(self, doc_id: str, position: int) -> dict:
+        """Toggle the comment state of a line.
+
+        - **Commenting** prepends ``# `` and marks the line as COMMENT.
+        - **Uncommenting** strips the leading ``#`` (and one optional
+          space) then re-parses the text via ``parse_line`` — this may
+          produce OK, WARNING, or ERROR depending on validity.
+
+        The operation is recorded for undo/redo via ``replace_line``.
+
+        Returns the serialized replacement line.
+        """
+        doc = self._documents[doc_id]
+        old_line = doc[position]
+        handler = get_handler(doc.doc_type)
+
+        if handler.is_comment(old_line.raw_text):
+            # Uncomment — strip the comment indicator and re-parse
+            stripped = old_line.raw_text.lstrip()
+            # Remove leading '#' and optional single space
+            if stripped.startswith("# "):
+                raw = stripped[2:]
+            elif stripped.startswith("#"):
+                raw = stripped[1:]
+            else:
+                raw = stripped
+
+            # Preserve leading whitespace from original line
+            leading_ws = old_line.raw_text[: len(old_line.raw_text) - len(old_line.raw_text.lstrip())]
+            raw = leading_ws + raw
+
+            new_line = parse_line(raw, doc.doc_type, self._nqs)
+            # Preserve the line_id so the undo replace works correctly
+            new_line = DocumentLine(
+                line_id=old_line.line_id,
+                raw_text=new_line.raw_text,
+                data=new_line.data,
+                validation_result=new_line.validation_result,
+            )
+        else:
+            # Comment — prepend '# ' to the raw text
+            new_raw = self._COMMENT_PREFIX + old_line.raw_text
+            new_line = DocumentLine(
+                line_id=old_line.line_id,
+                raw_text=new_raw,
+                validation_result=ValidationResult(status=LineStatus.COMMENT),
+            )
+
+        doc.replace_line(old_line.line_id, new_line)
+
+        # Incremental conflict update
+        detector = self._conflict_detectors.get(doc_id)
+        if detector is not None:
+            if new_line.data is not None:
+                detector.update_line(new_line.line_id, new_line.data)
+            else:
+                detector.remove_line(new_line.line_id)
+
+        action = "uncommented" if handler.is_comment(old_line.raw_text) else "commented"
+        logger.info("%s line at pos=%d in doc=%s", action.title(), position, doc_id)
+        return self._serialize_line(position, new_line, detector, doc)
+
+    # ------------------------------------------------------------------
     # Save
     # ------------------------------------------------------------------
 
@@ -456,7 +540,9 @@ class DocumentService:
         detector = self._conflict_detectors.get(doc_id)
         if detector is None:
             return
-        if record.kind == "remove":
+        if record.kind == "swap":
+            pass  # Swap changes no net content; conflict state is unaffected.
+        elif record.kind == "remove":
             detector.remove_line(record.line_id)
         else:  # insert or replace
             data = record.new_line.data if record.new_line else None
@@ -473,7 +559,9 @@ class DocumentService:
             "can_undo": doc.can_undo,
             "can_redo": doc.can_redo,
         }
-        if record.kind != "remove":
+        if record.kind == "swap":
+            result["position2"] = record.position2
+        elif record.kind != "remove":
             line = doc[record.position]
             result["line"] = self._serialize_line(
                 record.position, line, detector, doc,

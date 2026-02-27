@@ -564,3 +564,135 @@ class TestUndoRedo:
             assert docs[0]["can_undo"] is True
         finally:
             os.unlink(path)
+
+
+# ==================================================================
+# Swap lines (integration through DocumentService)
+# ==================================================================
+
+class TestSwapLines:
+
+    def test_swap_adjacent_lines(self, svc: DocumentService):
+        path = _write_tmp(AF_LINES)
+        try:
+            svc.load("d1", path, DocumentType.AF)
+            line0_raw = svc.get_line("d1", 0)["raw_text"]
+            line1_raw = svc.get_line("d1", 1)["raw_text"]
+
+            result = svc.swap_lines("d1", 0, 1)
+            assert result["total_lines"] == len(svc.get_lines("d1"))  # no lines lost
+
+            assert svc.get_line("d1", 0)["raw_text"] == line1_raw
+            assert svc.get_line("d1", 1)["raw_text"] == line0_raw
+        finally:
+            os.unlink(path)
+
+    def test_swap_is_undoable(self, svc: DocumentService):
+        path = _write_tmp(AF_LINES)
+        try:
+            svc.load("d1", path, DocumentType.AF)
+            line0_raw = svc.get_line("d1", 0)["raw_text"]
+            line1_raw = svc.get_line("d1", 1)["raw_text"]
+
+            svc.swap_lines("d1", 0, 1)
+            result = svc.undo("d1")
+            assert result["action"] == "swap"
+
+            assert svc.get_line("d1", 0)["raw_text"] == line0_raw
+            assert svc.get_line("d1", 1)["raw_text"] == line1_raw
+        finally:
+            os.unlink(path)
+
+    def test_swap_same_position_raises(self, svc: DocumentService):
+        path = _write_tmp(AF_LINES)
+        try:
+            svc.load("d1", path, DocumentType.AF)
+            with pytest.raises(ValueError):
+                svc.swap_lines("d1", 0, 0)
+        finally:
+            os.unlink(path)
+
+
+# ==================================================================
+# Toggle comment (integration through DocumentService)
+# ==================================================================
+
+class TestToggleComment:
+
+    def test_comment_a_data_line(self, svc: DocumentService):
+        """Commenting a data line should produce status=comment."""
+        path = _write_tmp(AF_LINES)
+        try:
+            svc.load("d1", path, DocumentType.AF)
+            # Find a data line
+            lines = svc.get_lines("d1")
+            data_line = next(l for l in lines if l["has_data"])
+            pos = data_line["position"]
+
+            result = svc.toggle_comment("d1", pos)
+            assert result["status"] == "comment"
+            assert result["raw_text"].lstrip().startswith("#")
+            assert result["has_data"] is False
+        finally:
+            os.unlink(path)
+
+    def test_uncomment_a_comment_line(self, svc: DocumentService):
+        """Uncommenting a valid commented-out AF line should produce a parseable data line."""
+        # Write a file where line 2 is a commented data line
+        content = "# {in1} 0.5 net-regular_em_sh\n"
+        path = _write_tmp(content)
+        try:
+            svc.load("d1", path, DocumentType.AF)
+            assert svc.get_line("d1", 0)["status"] == "comment"
+
+            result = svc.toggle_comment("d1", 0)
+            # After uncommenting, it should parse as a valid AF line
+            assert result["status"] in ("ok", "warning")
+            assert result["has_data"] is True
+        finally:
+            os.unlink(path)
+
+    def test_uncomment_invalid_content_produces_error(self, svc: DocumentService):
+        """Uncommenting a line with garbage content should produce error status."""
+        content = "# this is not valid af syntax at all\n"
+        path = _write_tmp(content)
+        try:
+            svc.load("d1", path, DocumentType.AF)
+            result = svc.toggle_comment("d1", 0)
+            assert result["status"] == "error"
+        finally:
+            os.unlink(path)
+
+    def test_toggle_is_undoable(self, svc: DocumentService):
+        """Toggle comment should be undoable."""
+        path = _write_tmp(AF_LINES)
+        try:
+            svc.load("d1", path, DocumentType.AF)
+            lines = svc.get_lines("d1")
+            data_line = next(l for l in lines if l["has_data"])
+            pos = data_line["position"]
+            original_raw = data_line["raw_text"]
+
+            svc.toggle_comment("d1", pos)
+            assert svc.get_line("d1", pos)["status"] == "comment"
+
+            svc.undo("d1")
+            assert svc.get_line("d1", pos)["raw_text"] == original_raw
+        finally:
+            os.unlink(path)
+
+    def test_double_toggle_round_trips(self, svc: DocumentService):
+        """Comment then uncomment should restore the original line."""
+        path = _write_tmp(AF_LINES)
+        try:
+            svc.load("d1", path, DocumentType.AF)
+            lines = svc.get_lines("d1")
+            data_line = next(l for l in lines if l["has_data"])
+            pos = data_line["position"]
+            original_raw = data_line["raw_text"]
+
+            svc.toggle_comment("d1", pos)  # comment
+            svc.toggle_comment("d1", pos)  # uncomment
+            assert svc.get_line("d1", pos)["raw_text"] == original_raw
+        finally:
+            os.unlink(path)

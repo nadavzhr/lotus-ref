@@ -368,3 +368,63 @@ class TestUndoMultipleOperations:
         doc = Document(DocumentType.AF)
         doc.append_line(_make_line(line_id="a"))
         assert not doc.can_undo
+
+
+# ===========================================================
+# Swap lines
+# ===========================================================
+
+class TestSwapLines:
+
+    @pytest.fixture
+    def doc(self):
+        return Document(DocumentType.AF, lines=[
+            _make_line(line_id="a", raw_text="A"),
+            _make_line(line_id="b", raw_text="B"),
+            _make_line(line_id="c", raw_text="C"),
+        ])
+
+    def test_swap_adjacent(self, doc):
+        doc.swap_lines(0, 1)
+        assert doc[0].raw_text == "B"
+        assert doc[1].raw_text == "A"
+        assert doc.get_position("a") == 1
+        assert doc.get_position("b") == 0
+
+    def test_swap_non_adjacent(self, doc):
+        doc.swap_lines(0, 2)
+        assert doc[0].raw_text == "C"
+        assert doc[2].raw_text == "A"
+
+    def test_swap_is_recorded(self, doc):
+        doc.swap_lines(0, 1)
+        assert doc.can_undo
+
+    def test_swap_same_raises(self, doc):
+        with pytest.raises(ValueError, match="itself"):
+            doc.swap_lines(1, 1)
+
+    def test_swap_out_of_range_raises(self, doc):
+        with pytest.raises(IndexError):
+            doc.swap_lines(0, 99)
+
+    def test_undo_swap(self, doc):
+        doc.swap_lines(0, 1)
+        record = doc.undo()
+        assert record.kind == "swap"
+        assert doc[0].raw_text == "A"
+        assert doc[1].raw_text == "B"
+
+    def test_redo_swap(self, doc):
+        doc.swap_lines(1, 2)
+        doc.undo()
+        record = doc.redo()
+        assert record.kind == "swap"
+        assert doc[1].raw_text == "C"
+        assert doc[2].raw_text == "B"
+
+    def test_swap_mutation_record_positions(self, doc):
+        doc.swap_lines(0, 2)
+        record = doc.undo()
+        assert record.position == 0
+        assert record.position2 == 2

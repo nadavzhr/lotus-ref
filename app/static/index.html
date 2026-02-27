@@ -395,6 +395,10 @@
     opacity: 0.35;
     cursor: not-allowed;
   }
+  .action-btn.swap { color: var(--lavender); font-size: 11px; padding: 1px 4px; }
+  .action-btn.swap:hover { background: var(--lavender); color: var(--bg); }
+  .action-btn.cmt { color: var(--subtext); font-size: 11px; padding: 1px 4px; }
+  .action-btn.cmt:hover { background: var(--subtext); color: var(--bg); }
 
   /* Search / Filter bar */
   .search-bar {
@@ -645,6 +649,15 @@ document.addEventListener('keydown', (e) => {
   } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
     e.preventDefault();
     redoAction();
+  } else if (e.altKey && e.key === 'ArrowUp' && editingPosition !== null) {
+    e.preventDefault();
+    swapUp(editingPosition);
+  } else if (e.altKey && e.key === 'ArrowDown' && editingPosition !== null) {
+    e.preventDefault();
+    swapDown(editingPosition);
+  } else if ((e.ctrlKey || e.metaKey) && e.key === '/' && editingPosition !== null) {
+    e.preventDefault();
+    toggleComment(editingPosition);
   }
 });
 
@@ -734,6 +747,9 @@ function renderLines(lines) {
     const editBtn = line.status !== 'comment'
       ? `<button class="edit-btn" onclick="startEdit(${line.position})" title="Edit this line">Edit</button>`
       : '';
+    const cmtBtn = `<button class="action-btn cmt" onclick="toggleComment(${line.position})" title="Toggle comment">#</button>`;
+    const upBtn = `<button class="action-btn swap" onclick="swapUp(${line.position})" title="Move up">▲</button>`;
+    const dnBtn = `<button class="action-btn swap" onclick="swapDown(${line.position})" title="Move down">▼</button>`;
     const insBtn = `<button class="action-btn ins" onclick="insertLineAt(${line.position + 1})" title="Insert new line below">+</button>`;
     const delBtn = `<button class="action-btn del" onclick="deleteLine(${line.position})" title="Delete this line">×</button>`;
 
@@ -742,7 +758,7 @@ function renderLines(lines) {
       <td class="line-status">${pillHtml(line.status)}</td>
       <td class="line-text">${esc(line.raw_text)}</td>
       <td class="line-messages">${msgs.join('<br>')}</td>
-      <td class="edit-col">${editBtn}${insBtn}${delBtn}</td>
+      <td class="edit-col">${editBtn}${cmtBtn}${upBtn}${dnBtn}${insBtn}${delBtn}</td>
     </tr>`;
   }).join('');
 }
@@ -798,6 +814,58 @@ async function insertLineAt(position) {
     await refreshLines();
   } catch (e) {
     alert('Error: ' + e.message);
+  }
+}
+
+// ---- Swap Lines ----
+
+async function swapUp(position) {
+  if (position <= 0) return;
+  await doSwap(position, position - 1);
+}
+
+async function swapDown(position) {
+  if (position >= linesData.length - 1) return;
+  await doSwap(position, position + 1);
+}
+
+async function doSwap(posA, posB) {
+  try {
+    const res = await fetch(`${API}/documents/${currentDocId}/swap`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ pos_a: posA, pos_b: posB })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      return alert(`Swap failed: ${err.detail || res.statusText}`);
+    }
+    // Adjust editing position if the edited line was involved
+    if (editingPosition === posA) editingPosition = posB;
+    else if (editingPosition === posB) editingPosition = posA;
+    updateUndoRedoState(true, false);
+    await refreshLines();
+  } catch (e) {
+    alert('Swap error: ' + e.message);
+  }
+}
+
+// ---- Toggle Comment ----
+
+async function toggleComment(position) {
+  try {
+    const res = await fetch(
+      `${API}/documents/${currentDocId}/lines/${position}/toggle-comment`,
+      { method: 'POST' }
+    );
+    if (!res.ok) {
+      const err = await res.json();
+      return alert(`Toggle comment failed: ${err.detail || res.statusText}`);
+    }
+    updateUndoRedoState(true, false);
+    await refreshLines();
+  } catch (e) {
+    alert('Toggle comment error: ' + e.message);
   }
 }
 

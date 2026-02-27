@@ -36,18 +36,23 @@ class MutationRecord:
     """Describes a mutation that was applied to a :class:`Document`.
 
     Attributes:
-        kind:     ``"insert"`` | ``"remove"`` | ``"replace"``
+        kind:     ``"insert"`` | ``"remove"`` | ``"replace"`` | ``"swap"``
         position: 0-based line position at the time of the mutation.
-        line_id:  Stable UUID of the affected line.
-        old_line: The line that was removed or replaced (``None`` for insert).
+                  For swaps this is the *lower* of the two positions.
+        line_id:  Stable UUID of the affected line (for swaps, the line
+                  that was at *position* before the swap).
+        old_line: The line that was removed or replaced (``None`` for
+                  insert and swap).
         new_line: The line that was inserted or is the replacement
-                  (``None`` for remove).
+                  (``None`` for remove and swap).
+        position2: Second position involved in a swap (``None`` otherwise).
     """
     kind: str
     position: int
     line_id: str
     old_line: Optional[DocumentLine] = None
     new_line: Optional[DocumentLine] = None
+    position2: Optional[int] = None
 
 
 # ------------------------------------------------------------------
@@ -118,6 +123,30 @@ class _ReplaceCmd:
         doc._raw_replace_line(self._old_line.line_id, self._new_line)
         return MutationRecord("replace", pos, self._new_line.line_id,
                               old_line=self._old_line, new_line=self._new_line)
+
+
+class _SwapCmd:
+    """Reversible swap of two adjacent lines."""
+    __slots__ = ("_pos_a", "_pos_b")
+
+    def __init__(self, pos_a: int, pos_b: int) -> None:
+        self._pos_a = pos_a
+        self._pos_b = pos_b
+
+    def undo(self, doc: Document) -> MutationRecord:
+        # Swapping again reverses the original swap
+        line_a = doc._lines[self._pos_a]
+        doc._raw_swap_lines(self._pos_a, self._pos_b)
+        return MutationRecord("swap", min(self._pos_a, self._pos_b),
+                              line_a.line_id,
+                              position2=max(self._pos_a, self._pos_b))
+
+    def redo(self, doc: Document) -> MutationRecord:
+        line_a = doc._lines[self._pos_a]
+        doc._raw_swap_lines(self._pos_a, self._pos_b)
+        return MutationRecord("swap", min(self._pos_a, self._pos_b),
+                              line_a.line_id,
+                              position2=max(self._pos_a, self._pos_b))
 
 
 class Document:
@@ -214,6 +243,18 @@ class Document:
         self._undo_stack.append(_ReplaceCmd(old_line, new_line))
         self._redo_stack.clear()
 
+    def swap_lines(self, pos_a: int, pos_b: int) -> None:
+        """Swap two lines by position.  Recorded for undo.
+
+        Raises ``IndexError`` if either position is out of range, and
+        ``ValueError`` if the positions are identical.
+        """
+        if pos_a == pos_b:
+            raise ValueError("Cannot swap a line with itself")
+        self._raw_swap_lines(pos_a, pos_b)
+        self._undo_stack.append(_SwapCmd(pos_a, pos_b))
+        self._redo_stack.clear()
+
     # ------------------------------------------------------------------
     # Undo / Redo
     # ------------------------------------------------------------------
@@ -291,6 +332,22 @@ class Document:
             self._rebuild_index()
         else:
             self._index[new_line.line_id] = pos
+
+    def _raw_swap_lines(self, pos_a: int, pos_b: int) -> None:
+        """Swap two lines by position without recording to undo."""
+        # Bounds check
+        if not (0 <= pos_a < len(self._lines)):
+            raise IndexError(f"Position {pos_a} out of range")
+        if not (0 <= pos_b < len(self._lines)):
+            raise IndexError(f"Position {pos_b} out of range")
+
+        line_a = self._lines[pos_a]
+        line_b = self._lines[pos_b]
+        self._lines[pos_a] = line_b
+        self._lines[pos_b] = line_a
+        self._index[line_a.line_id] = pos_b
+        self._index[line_b.line_id] = pos_a
+        self._lines_cache = None
 
     # ------------------------------------------------------------------
     # Internals

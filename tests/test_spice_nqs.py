@@ -357,3 +357,32 @@ class TestResolveToCanonicalIds:
 
     def test_nonexistent_net_returns_empty(self, nqs):
         assert nqs.resolve_to_canonical_ids("d", "nonexistent", False, False) == frozenset()
+
+
+class TestLazyResolution:
+    """Verify that tpl-net-to-top mapping is computed lazily, not at startup."""
+
+    def test_cache_starts_empty(self, nqs):
+        """No entries are pre-computed — the cache should start empty."""
+        info = nqs._resolve_tpl_net_to_top_ids.cache_info()
+        assert info.currsize == 0
+
+    def test_cache_populates_on_demand(self, nqs):
+        """Resolving a net populates the cache only for the queried entries."""
+        nqs.resolve_to_canonical_ids("d", "n3", False, False)
+        info = nqs._resolve_tpl_net_to_top_ids.cache_info()
+        assert info.currsize > 0
+        assert info.misses > 0
+
+    def test_repeated_queries_hit_cache(self, nqs):
+        """Second call for the same net should be a cache hit."""
+        nqs.resolve_to_canonical_ids("d", "n3", False, False)
+        info_after_first = nqs._resolve_tpl_net_to_top_ids.cache_info()
+
+        # Clear resolve_to_canonical_ids cache so the inner
+        # _resolve_tpl_net_to_top_ids is actually invoked again.
+        nqs.resolve_to_canonical_ids.cache_clear()
+        nqs.resolve_to_canonical_ids("d", "n3", False, False)
+        info_after_second = nqs._resolve_tpl_net_to_top_ids.cache_info()
+
+        assert info_after_second.hits > info_after_first.hits

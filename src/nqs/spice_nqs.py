@@ -267,7 +267,6 @@ class SpiceNetlistQueryService:
         # Canonical net ID infrastructure for conflict detection
         self._build_canonical_id_table()
         self._build_instance_paths()
-        self._build_template_net_to_top_ids()
 
         logger.info("SpiceNetlistQueryService ready (top cell: %s)", self._top_cell)
 
@@ -389,7 +388,7 @@ class SpiceNetlistQueryService:
                 tpl, net_norm, net_regex,
             )
             for net in resolved:
-                ids = self._tpl_net_to_top.get((tpl, net))
+                ids = self._resolve_tpl_net_to_top_ids(tpl, net)
                 if ids:
                     result_ids.update(ids)
 
@@ -640,38 +639,33 @@ class SpiceNetlistQueryService:
             {k: len(v) for k, v in self._template_instances.items()},
         )
 
-    def _build_template_net_to_top_ids(self) -> None:
+    @lru_cache(maxsize=8192)
+    def _resolve_tpl_net_to_top_ids(self, tpl: str, net: str) -> frozenset[int]:
         """
-        Build mapping: (template, canonical_net_within_template) → frozenset
-        of top-cell canonical net IDs.
+        Lazily compute the top-cell canonical net IDs for a single
+        (template, canonical_net_within_template) pair.
 
         For the top cell this is a 1:1 identity mapping.  For child
-        templates each canonical net is expanded through every instance
-        path and resolved via the top cell alias map.
+        templates the net is expanded through every instance path and
+        resolved via the top cell alias map.
+
+        Results are cached so repeated lookups are free.
         """
-        self._tpl_net_to_top: dict[tuple[str, str], frozenset[int]] = {}
+        if tpl == self._top_cell:
+            net_id = self._net_id_map.get(net)
+            return frozenset({net_id}) if net_id is not None else frozenset()
+
         top_alias = self._alias_maps[self._top_cell]
-
-        for tpl in self._all_templates:
-            if tpl == self._top_cell:
-                for net in self._canonical_nets[tpl]:
-                    net_id = self._net_id_map.get(net)
-                    if net_id is not None:
-                        self._tpl_net_to_top[(tpl, net)] = frozenset({net_id})
-                continue
-
-            paths = self._template_instances.get(tpl, [])
-            for net in self._canonical_nets[tpl]:
-                ids: set[int] = set()
-                for path in paths:
-                    hier = f"{path}/{net}"
-                    top_canonical = top_alias.get(hier)
-                    if top_canonical is not None:
-                        net_id = self._net_id_map.get(top_canonical)
-                        if net_id is not None:
-                            ids.add(net_id)
-                if ids:
-                    self._tpl_net_to_top[(tpl, net)] = frozenset(ids)
+        paths = self._template_instances.get(tpl, [])
+        ids: set[int] = set()
+        for path in paths:
+            hier = f"{path}/{net}"
+            top_canonical = top_alias.get(hier)
+            if top_canonical is not None:
+                net_id = self._net_id_map.get(top_canonical)
+                if net_id is not None:
+                    ids.add(net_id)
+        return frozenset(ids)
 
     def _resolve_matching_nets_in_template(
         self, template: str, net_name: str, net_regex: bool,
@@ -813,6 +807,7 @@ class SpiceNetlistQueryService:
             self.find_matches.cache_clear()
             self.resolve_to_canonical_ids.cache_clear()
             self._resolve_canonical_net_name.cache_clear()
+            self._resolve_tpl_net_to_top_ids.cache_clear()
 
     def __del__(self):
         self._cleanup_database()

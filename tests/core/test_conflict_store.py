@@ -157,8 +157,13 @@ def _make_mock_nqs_for_detector():
     nqs.top_cell = "top"
     nqs.templates = {"top"}
     nqs.nets_in_template = {"top": {"vdd", "vss", "clk"}}
-    # find_matches returns qualified net names; find_net_instance_names
-    # maps template-scoped nets to top-cell names.
+    # Canonical name lookups (fast path uses get_canonical_net_name)
+    nqs.canonical_map = {
+        ("vdd", "top"): "vdd",
+        ("vss", "top"): "vss",
+        ("clk", "top"): "clk",
+    }
+    # find_matches returns qualified net names (slow path / regex)
     nqs.net_matches = {
         (None, "vdd", False): ["vdd"],
         ("top", "vdd", False): ["vdd"],
@@ -167,6 +172,7 @@ def _make_mock_nqs_for_detector():
         (None, "clk", False): ["clk"],
         ("top", "clk", False): ["clk"],
     }
+    # Hierarchy resolution: template-scoped net → top-cell names
     nqs.instance_names_map = {
         ("top", "vdd"): {"vdd"},
         ("top", "vss"): {"vss"},

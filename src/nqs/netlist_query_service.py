@@ -428,21 +428,15 @@ class NetlistQueryService:
     def _get_matching_templates(self, template_name: str, template_regex: bool) -> list[str]:
         """
         Get list of templates that match the given pattern.
+        Uses in-memory set — no SQL needed (template count is always small).
         """
         if not template_regex:
-            results = self._execute_sql_query(
-                'SELECT name FROM templates WHERE name = ? LIMIT 1',
-                (template_name,)
-            )
-            return [results[0][0]] if results else []
+            return [template_name] if template_name in self._all_templates else []
 
         try:
-            results = self._execute_sql_query(
-                'SELECT name FROM templates WHERE name REGEXP ?',
-                (template_name,)
-            )
-            return [row[0] for row in results]
-        except Exception as e:
+            pattern = re.compile(template_name, re.IGNORECASE)
+            return [t for t in self._all_templates if pattern.search(t)]
+        except re.error as e:
             logger.error(f"Error matching template pattern '{template_name}': {e}")
             return []
 
@@ -476,12 +470,7 @@ class NetlistQueryService:
         placeholders = ','.join('?' * len(templates))
         try:
             results = self._execute_sql_query(
-                f'''
-                SELECT t.name, n.net_name
-                FROM nets n
-                JOIN templates t ON n.template_id = t.id
-                WHERE t.name IN ({placeholders}) AND n.net_name REGEXP ?
-                ''',
+                f'SELECT template_name, net_name FROM nets WHERE template_name IN ({placeholders}) AND net_name REGEXP ?',
                 (*templates, net_name)
             )
         except Exception as e:
@@ -515,12 +504,7 @@ class NetlistQueryService:
             net_chunk = expanded[start:start + available_for_nets]
             n_placeholders = ','.join('?' * len(net_chunk))
             chunk_results = self._execute_sql_query(
-                f'''
-                SELECT t.name, n.net_name
-                FROM nets n
-                JOIN templates t ON n.template_id = t.id
-                WHERE t.name IN ({t_placeholders}) AND n.net_name IN ({n_placeholders})
-                ''',
+                f'SELECT template_name, net_name FROM nets WHERE template_name IN ({t_placeholders}) AND net_name IN ({n_placeholders})',
                 (*templates, *net_chunk)
             )
             results.extend(chunk_results)
@@ -535,12 +519,7 @@ class NetlistQueryService:
             return []
         placeholders = ','.join('?' * len(templates))
         results = self._execute_sql_query(
-            f'''
-            SELECT t.name, n.net_name
-            FROM nets n
-            JOIN templates t ON n.template_id = t.id
-            WHERE t.name IN ({placeholders}) AND n.net_name = ?
-            ''',
+            f'SELECT template_name, net_name FROM nets WHERE template_name IN ({placeholders}) AND net_name = ?',
             (*templates, net_name)
         )
         return self._format_net_results(results)
@@ -618,20 +597,20 @@ class NetlistQueryService:
     def _init_database(self) -> None:
         """Initialize in-memory SQLite database with netlist data.
         
-        Creates an in-memory database for efficient net completion queries.
-        The database includes tables with proper indexes for fast searching.
-        The database is cleaned up when this service is closed.
+        Uses a denormalized single-table WITHOUT ROWID schema keyed on
+        (template_name, net_name).  This eliminates JOINs and stores data
+        directly in the covering primary-key B-tree — queries answered
+        entirely from the index with no heap lookup.
         
         Performance optimizations applied:
-        - In-memory database (much faster than file-based for this use case)
+        - In-memory database (much faster than file-based)
+        - WITHOUT ROWID — data lives in the PK B-tree, no separate heap
         - Disabled journaling during bulk insert
         - Batch inserts with executemany
-        - Indexes created AFTER data insertion (faster for bulk loads)
+        - Plain tuples (no sqlite3.Row overhead)
         """
-        # Use in-memory database for maximum speed (data is rebuilt each session anyway)
         self._db_path = ':memory:'
         self._db_conn = sqlite3.connect(self._db_path, check_same_thread=False)
-        self._db_conn.row_factory = sqlite3.Row
         def _regexp(expr, item):
             if item is None:
                 return 0
@@ -645,49 +624,26 @@ class NetlistQueryService:
         # Performance pragmas for bulk insert
         cursor.execute('PRAGMA synchronous = OFF')
         cursor.execute('PRAGMA journal_mode = OFF')
-        cursor.execute('PRAGMA cache_size = 100000')  # Larger cache for bulk operations
+        cursor.execute('PRAGMA cache_size = 100000')
         cursor.execute('PRAGMA temp_store = MEMORY')
         
-        # Create templates table (no indexes yet - add after data)
-        cursor.execute('''
-            CREATE TABLE templates (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE
-            )
-        ''')
-        
-        # Create nets table with foreign key to templates (no indexes yet)
+        # Denormalized single-table schema — no JOINs needed.
+        # WITHOUT ROWID stores rows directly in the PK B-tree (covering index).
         cursor.execute('''
             CREATE TABLE nets (
-                id INTEGER PRIMARY KEY,
-                template_id INTEGER NOT NULL,
+                template_name TEXT NOT NULL,
                 net_name TEXT NOT NULL,
-                FOREIGN KEY (template_id) REFERENCES templates(id)
-            )
+                PRIMARY KEY (template_name, net_name)
+            ) WITHOUT ROWID
         ''')
         
-        # Populate the database - prepare all data first
-        sorted_templates = sorted(self._all_templates)
-        templates_data = [(i, template) for i, template in enumerate(sorted_templates)]
-        template_id_map = {template: i for i, template in enumerate(sorted_templates)}
-        
-        # Batch insert templates
-        cursor.executemany('INSERT INTO templates (id, name) VALUES (?, ?)', templates_data)
-        
-        # Prepare all nets data at once
+        # Batch insert all (template, net) pairs
         nets_data = []
         for template, nets in self._all_nets_in_templates.items():
-            template_id = template_id_map[template]
-            nets_data.extend((template_id, net) for net in nets)
-        
-        # Batch insert all nets
-        cursor.executemany('INSERT INTO nets (template_id, net_name) VALUES (?, ?)', nets_data)
-        
-        # Create indexes AFTER data insertion (much faster for bulk loads)
-        cursor.execute('CREATE INDEX idx_template_name ON templates(name)')
-        cursor.execute('CREATE INDEX idx_nets_template ON nets(template_id)')
-        cursor.execute('CREATE INDEX idx_nets_name ON nets(net_name)')
-        cursor.execute('CREATE INDEX idx_nets_template_name ON nets(template_id, net_name)')
+            nets_data.extend((template, net) for net in nets)
+        cursor.executemany(
+            'INSERT INTO nets (template_name, net_name) VALUES (?, ?)', nets_data
+        )
         
         self._db_conn.commit()
         

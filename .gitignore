@@ -92,3 +92,9 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Node
+node_modules/
+
+# Override Python lib/ ignore for frontend
+!frontend/src/lib/

@@ -2,8 +2,13 @@ import re
 import sqlite3
 from threading import RLock
 from functools import lru_cache
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 import logging
+from pathlib import Path
+
+if TYPE_CHECKING:
+    from .netlist_parser.Netlist import Netlist
+    from .netlist_parser.NetlistBuilder import NetlistBuilder
 
 def get_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
@@ -29,7 +34,7 @@ class NetlistQueryService:
     MAX_BUS_EXPANSION = 10000
     SQLITE_MAX_VARS_PER_QUERY = 900
 
-    def __init__(self, cell: str, spice_file: 'Path', fly_netlist: 'FlyNetlistBuilder'):
+    def __init__(self, cell: str, spice_file: 'Path', netlist: 'NetlistBuilder'):
         """
         Initialize the NetlistQueryService.
 
@@ -38,7 +43,7 @@ class NetlistQueryService:
         Args:
             cell: Name of the cell to load from the spice file
             spice_file: Path to the spice file
-            fly_netlist: Builder for working with netlist data
+            netlist: Builder for working with netlist data
 
         Raises:
             FileNotFoundError: If the spice file cannot be found
@@ -53,7 +58,7 @@ class NetlistQueryService:
 
         try:
             logger.info(f"Loading spice file for cell '{cell}': {spice_file}")
-            self._fly_netlist = fly_netlist.read_spice_file(cell, str(spice_file))
+            self._netlist = netlist.read_spice_file(cell, str(spice_file))
             logger.info(f"Successfully loaded netlist for cell: {cell}")
         except FileNotFoundError as e:
             logger.critical(f"Spice file not found: {e.filename}")
@@ -62,11 +67,11 @@ class NetlistQueryService:
             logger.critical(f"Error loading netlist: {e}", exc_info=True)
             raise RuntimeError(f"Error loading netlist: {e}") from e
 
-        self._top_cell = self._fly_netlist.get_top_cell().get_name().lower()
+        self._top_cell = self._netlist.get_top_cell().get_name().lower()
         logger.debug(f"Top cell identified: {self._top_cell}")
 
         self._all_templates: set[str] = set(
-                        [t.get_name().lower() for t in self._fly_netlist.get_templates()]
+                        [t.get_name().lower() for t in self._netlist.get_templates()]
         )
         logger.debug(f"Total templates loaded: {len(self._all_templates)}")
 
@@ -252,7 +257,7 @@ class NetlistQueryService:
         if canonical_name is None:
             return set()
 
-        return set(self._fly_netlist.get_net_instance_names(normalized_template, canonical_name))
+        return set(self._netlist.get_net_instance_names(normalized_template, canonical_name))
 
 ###########################################################################
 ############################ STATIC METHODS ##############################
@@ -553,7 +558,7 @@ class NetlistQueryService:
             return None
 
         try:
-            _, canonical_name = self._fly_netlist.get_canonical_net_name(
+            _, canonical_name = self._netlist.get_canonical_net_name(
                 net_name=net_name,
                 template_name=template_name,
                 lower=True,
@@ -588,7 +593,7 @@ class NetlistQueryService:
         for template in self._all_templates:
             canonical_nets_in_templates[template] = {
                 canonical_name.lower()
-                for _, canonical_name in self._fly_netlist.get_all_nets(template)
+                for _, canonical_name in self._netlist.get_all_nets(template)
             }
 
         return canonical_nets_in_templates

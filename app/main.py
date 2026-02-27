@@ -26,7 +26,10 @@ from nqs.spice_nqs import SpiceNetlistQueryService  # noqa — src/nqs/
 _spice_file = os.path.join(_project_root, "data", "spice", "mycell.sp")
 nqs = SpiceNetlistQueryService(cell="mycell", spice_file=_spice_file)
 
-init_service(DocumentService(nqs=nqs))
+_spice_file_2 = os.path.join(_project_root, "tmp", "ip78d6hcf2sr4096x135m4i2k4w8r2lya", "spice", "ip78d6hcf2sr4096x135m4i2k4w8r2lya.sp")
+nqs2 = SpiceNetlistQueryService(cell="ip78d6hcf2sr4096x135m4i2k4w8r2lya", spice_file=_spice_file_2)
+
+init_service(DocumentService(nqs=nqs2))
 
 # API routes
 app.include_router(router)

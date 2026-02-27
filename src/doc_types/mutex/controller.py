@@ -1,18 +1,21 @@
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from doc_types.mutex.exceptions import EntryNotFoundError
+
+logger = logging.getLogger(__name__)
 from doc_types.mutex.line_data import MutexLineData, FEVMode
 from doc_types.mutex.entry import MutexEntry
 from core.validation_result import ValidationResult
 
 from doc_types.mutex.session import MutexEditSessionState
-from core.interfaces import IEditController, INetlistQueryService
+from core.interfaces import INetlistQueryService
 from doc_types.mutex.validator import validate
 
 
-class MutexEditController(IEditController[MutexLineData]):
+class MutexEditController:
 
     def __init__(self, netlist_query_service: INetlistQueryService):
         self._nqs = netlist_query_service
@@ -23,6 +26,7 @@ class MutexEditController(IEditController[MutexLineData]):
     # ---------------------------
 
     def start_session(self, session_id: str) -> None:
+        logger.debug("Mutex session started: %s", session_id)
         self._session = MutexEditSessionState(session_id)
 
     # ---------------------------
@@ -111,9 +115,13 @@ class MutexEditController(IEditController[MutexLineData]):
         """
         session_result = self._session.validate()
         if not session_result:
+            logger.debug("Mutex session validation failed: %s", session_result.errors)
             return session_result
 
-        return validate(self.to_line_data(), nqs=self._nqs)
+        result = validate(self.to_line_data(), nqs=self._nqs)
+        if result.warnings:
+            logger.debug("Mutex validation warnings: %s", result.warnings)
+        return result
 
     def to_line_data(self) -> MutexLineData:
         """

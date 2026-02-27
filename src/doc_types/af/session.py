@@ -5,12 +5,11 @@ from typing import Optional
 
 from doc_types.af.line_data import AfLineData
 from core.validation_result import ValidationResult
-from core.interfaces import IEditSessionState
 from doc_types.af import validator
 
 
 @dataclass(slots=True)
-class AfEditSessionState(IEditSessionState):
+class AfEditSessionState:
     session_id: str
     template_name: Optional[str] = None
     template_regex_mode: bool = False

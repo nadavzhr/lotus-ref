@@ -13,12 +13,11 @@ from doc_types.mutex.exceptions import (
 )
 from doc_types.mutex.entry import MutexEntry
 from core.validation_result import ValidationResult
-from core.interfaces import IEditSessionState
 from doc_types.mutex.line_data import FEVMode
 
 from contextlib import contextmanager
 
-class MutexEditSessionState(IEditSessionState):
+class MutexEditSessionState:
 
     def __init__(self, session_id: str):
         self.session_id = session_id

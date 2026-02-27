@@ -20,8 +20,13 @@ Save flow:
 from __future__ import annotations
 
 import gzip
+import logging
+import os
+import tempfile
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 from core.document_type import DocumentType
 from core.document_line import DocumentLine
@@ -41,6 +46,8 @@ if TYPE_CHECKING:
 # ------------------------------------------------------------------
 
 def _is_gz(path: Path) -> bool:
+    # path.suffixes[-2:] returns [] for bare filenames, which correctly
+    # does not match — so single-suffix and no-suffix files are safe.
     return path.suffix == ".gz" or path.suffixes[-2:] == [".gz"]
 
 
@@ -52,11 +59,34 @@ def _read_text(path: Path) -> str:
 
 
 def _write_text(path: Path, content: str) -> None:
+    """Write *content* atomically: write to a temp file then rename."""
     if _is_gz(path):
-        with gzip.open(path, "wt", encoding="utf-8") as f:
-            f.write(content)
+        # gzip: write to temp, then atomic rename
+        fd, tmp = tempfile.mkstemp(
+            suffix=".tmp.gz", dir=str(path.parent)
+        )
+        try:
+            os.close(fd)
+            with gzip.open(tmp, "wt", encoding="utf-8") as f:
+                f.write(content)
+            os.replace(tmp, str(path))
+        except BaseException:
+            with open(tmp, "w") as _:  # noqa: ensure file exists before unlink
+                pass
+            os.unlink(tmp)
+            raise
     else:
-        path.write_text(content, encoding="utf-8")
+        fd, tmp = tempfile.mkstemp(
+            suffix=".tmp", dir=str(path.parent)
+        )
+        try:
+            os.close(fd)
+            Path(tmp).write_text(content, encoding="utf-8")
+            os.replace(tmp, str(path))
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
 
 
 # ------------------------------------------------------------------
@@ -137,6 +167,7 @@ def load_document(
 
     doc_lines = [parse_line(line, doc_type, nqs) for line in raw_lines]
 
+    logger.info("Loaded %d lines from %s (type=%s)", len(doc_lines), path, doc_type.value)
     return Document(
         doc_type=doc_type,
         file_path=str(path),
@@ -174,3 +205,4 @@ def save_document(
             output_lines.append(line.raw_text)
 
     _write_text(target, "\n".join(output_lines) + "\n")
+    logger.info("Saved %d lines to %s", len(output_lines), target)

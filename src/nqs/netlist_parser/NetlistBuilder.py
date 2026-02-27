@@ -184,7 +184,11 @@ class NetlistBuilder:
                     self._logger.error(f'Unrecognized line in {template.get_name()}: {line}')
 
             except ValueError as ex:
+                file.close()
                 raise ValueError(f'While reading spice file on line {counter}: {ex}. Line: {line}')
+            except BaseException:
+                file.close()
+                raise
 
         file.close()
 

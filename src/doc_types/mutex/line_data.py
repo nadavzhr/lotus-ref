@@ -14,7 +14,7 @@ class FEVMode(Enum):
     IGNORE = "ignore"
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class MutexLineData:
     """Typed representation of a single Mutex configuration line."""
     num_active: int = 1

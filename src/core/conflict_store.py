@@ -37,9 +37,12 @@ Usage::
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Optional, TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from core.document_line import DocumentLine
@@ -159,7 +162,7 @@ class ConflictStore:
         if not net_ids:
             return None
         lines = self.get_conflicting_lines(line_id)
-        return ConflictInfo(conflicting_line_ids=lines, shared_net_ids=net_ids)
+        return ConflictInfo(conflicting_line_ids=frozenset(lines), shared_net_ids=net_ids)
 
     # ------------------------------------------------------------------
     # Internals
@@ -181,7 +184,7 @@ class ConflictStore:
 @dataclass(frozen=True, slots=True)
 class ConflictInfo:
     """Lightweight snapshot of conflict data for a single line."""
-    conflicting_line_ids: set[str]
+    conflicting_line_ids: frozenset[str]
     shared_net_ids: frozenset[str]
 
 
@@ -240,7 +243,7 @@ class ConflictDetector:
     # Hierarchy cache — resolved lazily, never evicted
     # ------------------------------------------------------------------
 
-    @lru_cache(maxsize=None)
+    @lru_cache(maxsize=4096)
     def _resolve_tpl_net_to_top_names(self, tpl: str, net: str) -> frozenset[str]:
         """
         Map a single (template, canonical_net) to top-cell net names.
@@ -362,6 +365,11 @@ class ConflictDetector:
                 if nets:
                     line_nets[line.line_id] = nets
         self._store.build_from_lines(line_nets)
+        logger.debug(
+            "Conflict index rebuilt: %d lines with nets, %d unique nets",
+            len(line_nets),
+            sum(len(nets) for nets in line_nets.values()),
+        )
 
     # ------------------------------------------------------------------
     # Incremental updates

@@ -15,10 +15,13 @@ never see UUIDs.
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from core.document_type import DocumentType
 from core.document_line import DocumentLine
+
+logger = logging.getLogger(__name__)
 
 
 class Document:
@@ -121,6 +124,7 @@ class Document:
         pos = self._index.pop(line_id)
         self._lines[pos] = new_line
         self._lines_cache = None
+        logger.debug("Replaced line %s at position %d", line_id, pos)
         # If the id changed we need a full rebuild; if same, just update index
         if new_line.line_id != line_id:
             self._rebuild_index()

@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from core import DocumentType
-from app.document_service import DocumentService
+from services.document_service import DocumentService
 
 
 router = APIRouter(prefix="/api")
@@ -97,6 +97,16 @@ def list_documents():
     return svc().list_documents()
 
 
+@router.delete("/documents/{doc_id}")
+def close_document(doc_id: str):
+    """Unload a document from memory."""
+    try:
+        svc().close_document(doc_id)
+        return {"status": "closed", "doc_id": doc_id}
+    except KeyError:
+        raise HTTPException(404, f"Document not found: {doc_id}")
+
+
 @router.get("/documents/{doc_id}/lines")
 def get_lines(doc_id: str, offset: int = 0, limit: Optional[int] = None):
     """Get lines in a document (supports pagination via *offset* / *limit*)."""
@@ -113,6 +123,28 @@ def get_line(doc_id: str, position: int):
         return svc().get_line(doc_id, position)
     except (KeyError, IndexError):
         raise HTTPException(404, "Document or line not found")
+
+
+@router.get("/documents/{doc_id}/search")
+def search_lines(
+    doc_id: str,
+    q: str = "",
+    regex: bool = False,
+    status: Optional[str] = None,
+):
+    """Search / filter lines by content or status.
+
+    Query params:
+        q:      Substring or regex to match in raw_text.
+        regex:  If true, treat *q* as a regex.
+        status: Filter to a specific status (e.g. "error", "conflict").
+    """
+    try:
+        return svc().search_lines(doc_id, q, use_regex=regex, status_filter=status)
+    except KeyError:
+        raise HTTPException(404, f"Document not found: {doc_id}")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.delete("/documents/{doc_id}/lines/{position}")

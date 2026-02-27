@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from app.document_service import DocumentService
+from services.document_service import DocumentService
 from app.routes import router, init_service
 from nqs.netlist_query_service import NetlistQueryService
 from nqs.netlist_parser.NetlistBuilder import NetlistBuilder

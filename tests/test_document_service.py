@@ -13,7 +13,7 @@ import tempfile
 
 import pytest
 
-from app.document_service import DocumentService
+from services.document_service import DocumentService
 from core import DocumentType, LineStatus
 from tests.mock_nqs import MockNetlistQueryService
 

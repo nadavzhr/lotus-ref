@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from doc_types.af.line_data import AfLineData
+
+logger = logging.getLogger(__name__)
 from core.validation_result import ValidationResult
 from doc_types.af.session import AfEditSessionState
-from core.interfaces import IEditController, INetlistQueryService
+from core.interfaces import INetlistQueryService
 from doc_types.af.validator import validate
 
 
-class AfEditController(IEditController[AfLineData]):
+class AfEditController:
 
     def __init__(self, netlist_query_service: INetlistQueryService):
         self._nqs = netlist_query_service
@@ -20,6 +23,7 @@ class AfEditController(IEditController[AfLineData]):
     # ---------------------------
 
     def start_session(self, session_id: str) -> None:
+        logger.debug("AF session started: %s", session_id)
         self._session = AfEditSessionState(session_id)
 
     # ---------------------------
@@ -73,9 +77,13 @@ class AfEditController(IEditController[AfLineData]):
         """
         session_result = self._session.validate()
         if not session_result:
+            logger.debug("AF session validation failed: %s", session_result.errors)
             return session_result
 
-        return validate(self.to_line_data(), nqs=self._nqs)
+        result = validate(self.to_line_data(), nqs=self._nqs)
+        if result.warnings:
+            logger.debug("AF validation warnings: %s", result.warnings)
+        return result
 
     def to_line_data(self) -> AfLineData:
         """

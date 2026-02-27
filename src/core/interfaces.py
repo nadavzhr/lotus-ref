@@ -1,15 +1,18 @@
 """
-Core interfaces and abstract base classes for the document editing system.
+Core interfaces (Protocols) for the document editing system.
 
 This module defines the contracts that document types implement:
 - INetlistQueryService: protocol for querying netlist data
 - IEditController: orchestrates editing a single line
 - IEditSessionState: mutable state for a single line edit session
+
+All interfaces use ``typing.Protocol`` for structural (duck-typed) subtyping.
+Concrete implementations do not need to inherit from these classes;
+they only need to provide the required attributes and methods.
 """
 from __future__ import annotations
 
-import abc
-from typing import Generic, Protocol, Optional, TypeVar
+from typing import Generic, Protocol, Optional, TypeVar, runtime_checkable
 
 from core.net_spec import NetSpec
 from core.validation_result import ValidationResult
@@ -89,11 +92,11 @@ class INetlistQueryService(Protocol):
     ) -> list[str]: ...
 
 
-class IEditSessionState(abc.ABC):
+@runtime_checkable
+class IEditSessionState(Protocol):
     """Mutable state for a single line edit session."""
     session_id: str
 
-    @abc.abstractmethod
     def validate(self) -> ValidationResult:
         """
         Check whether the session is complete and ready to commit.
@@ -101,7 +104,8 @@ class IEditSessionState(abc.ABC):
         ...
 
 
-class IEditController(abc.ABC, Generic[T]):
+@runtime_checkable
+class IEditController(Protocol[T]):
     """
     Orchestrates editing a single line in a document.
 
@@ -119,22 +123,18 @@ class IEditController(abc.ABC, Generic[T]):
         ctrl.start_session("line-99")   # or move on to another line
     """
 
-    @abc.abstractmethod
     def start_session(self, session_id: str) -> None:
         """Create a fresh session for the given line."""
         ...
 
-    @abc.abstractmethod
     def validate(self) -> ValidationResult:
         """Validate session state + service-level checks (warnings)."""
         ...
 
-    @abc.abstractmethod
     def to_line_data(self) -> T:
         """Serialize current session state into a typed line data object."""
         ...
 
-    @abc.abstractmethod
     def from_line_data(self, data: T) -> None:
         """Hydrate session state from an existing line (edit flow)."""
         ...

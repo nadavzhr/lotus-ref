@@ -12,6 +12,9 @@ positions to internal line_ids which are never exposed to the frontend.
 from __future__ import annotations
 
 import dataclasses
+import logging
+import re
+from collections import Counter
 from typing import Any, Optional
 
 from core import DocumentType, Document, DocumentLine, HasNetSpecs, LineStatus, IEditController, INetlistQueryService
@@ -22,6 +25,7 @@ from doc_types.mutex import FEVMode, MutexEditController
 from infrastructure import load_document, save_document
 from infrastructure.registry import get_handler
 
+logger = logging.getLogger(__name__)
 
 
 class DocumentService:
@@ -44,9 +48,11 @@ class DocumentService:
 
     def load(self, doc_id: str, file_path: str, doc_type: DocumentType) -> dict:
         """Load a file into memory and return a summary."""
+        logger.info("Loading document %s from %s (type=%s)", doc_id, file_path, doc_type.value)
         doc = load_document(file_path, doc_type, self._nqs)
         self._documents[doc_id] = doc
         self._rebuild_conflicts(doc_id)
+        logger.info("Loaded document %s: %d lines", doc_id, len(doc))
         return self._document_summary(doc_id, doc)
 
     def get_document(self, doc_id: str) -> Document:
@@ -57,6 +63,12 @@ class DocumentService:
             self._document_summary(did, doc)
             for did, doc in self._documents.items()
         ]
+
+    def close_document(self, doc_id: str) -> None:
+        """Remove a document from memory, freeing all associated resources."""
+        self._documents.pop(doc_id, None)
+        self._conflict_detectors.pop(doc_id, None)
+        logger.info("Closed document %s", doc_id)
 
     # ------------------------------------------------------------------
     # Line access
@@ -84,6 +96,60 @@ class DocumentService:
         line = doc[position]
         detector = self._conflict_detectors.get(doc_id)
         return self._serialize_line(position, line, detector, doc)
+
+    def search_lines(
+        self,
+        doc_id: str,
+        query: str,
+        *,
+        use_regex: bool = False,
+        status_filter: Optional[str] = None,
+    ) -> list[dict]:
+        """Search / filter lines in a document by content or status.
+
+        Args:
+            doc_id:        Loaded document identifier.
+            query:         Substring (or regex if *use_regex*) to match in
+                           ``raw_text``.  Empty string matches everything.
+            use_regex:     Treat *query* as a regex pattern.
+            status_filter: Optional status value to restrict results
+                           (e.g. ``"error"``, ``"conflict"``).
+
+        Returns:
+            List of serialized line dicts for matching lines.
+        """
+        doc = self._documents[doc_id]
+        detector = self._conflict_detectors.get(doc_id)
+
+        if use_regex:
+            try:
+                pattern = re.compile(query, re.IGNORECASE)
+            except re.error as exc:
+                raise ValueError(f"Invalid regex: {exc}") from exc
+        else:
+            pattern = None
+
+        results: list[dict] = []
+        for pos, line in enumerate(doc.lines):
+            # Text filter
+            if query:
+                if pattern is not None:
+                    if not pattern.search(line.raw_text):
+                        continue
+                elif query.lower() not in line.raw_text.lower():
+                    continue
+
+            # Determine effective status (accounting for conflicts)
+            effective_status = line.status.value
+            if detector and detector.is_conflicting(line.line_id):
+                effective_status = LineStatus.CONFLICT.value
+
+            # Status filter
+            if status_filter and effective_status != status_filter:
+                continue
+
+            results.append(self._serialize_line(pos, line, detector, doc))
+        return results
 
     # ------------------------------------------------------------------
     # Edit flow
@@ -116,6 +182,7 @@ class DocumentService:
 
         handler = get_handler(doc.doc_type)
         current_data = ctrl.to_line_data()
+        logger.debug("Hydrated session for doc=%s pos=%d", doc_id, position)
         return {
             "position": position,
             "doc_type": doc.doc_type.value,
@@ -156,6 +223,10 @@ class DocumentService:
         if detector is not None:
             detector.update_line(line_id, committed_data)
 
+        logger.info(
+            "Committed edit doc=%s pos=%d status=%s",
+            doc_id, position, vr.status.value,
+        )
         return self._serialize_line(position, new_line, detector, doc)
 
     # ------------------------------------------------------------------
@@ -173,6 +244,7 @@ class DocumentService:
             detector.remove_line(line.line_id)
 
         doc.remove_line(line.line_id)
+        logger.info("Deleted line at pos=%d from doc=%s", position, doc_id)
         return self._document_summary(doc_id, doc)
 
     def insert_blank_line(self, doc_id: str, position: int) -> dict:
@@ -183,6 +255,7 @@ class DocumentService:
             validation_result=ValidationResult(status=LineStatus.OK),
         )
         doc.insert_line(position, new_line)
+        logger.debug("Inserted blank line at pos=%d in doc=%s", position, doc_id)
         return {"position": position}
 
     # ------------------------------------------------------------------
@@ -193,7 +266,9 @@ class DocumentService:
         """Write document back to disk."""
         doc = self._documents[doc_id]
         save_document(doc, file_path)
-        return {"status": "saved", "file_path": file_path or doc.file_path}
+        target = file_path or doc.file_path
+        logger.info("Saved document %s to %s", doc_id, target)
+        return {"status": "saved", "file_path": target}
 
     # ------------------------------------------------------------------
     # NQS Query Preview
@@ -258,7 +333,6 @@ class DocumentService:
     # ------------------------------------------------------------------
 
     def _document_summary(self, doc_id: str, doc: Document) -> dict:
-        from collections import Counter
         detector = self._conflict_detectors.get(doc_id)
         statuses = Counter(line.status.value for line in doc.lines)
         if detector:

@@ -3,13 +3,13 @@ import { Badge } from "@/components/ui/badge"
 import { FileText } from "lucide-react"
 import type { DocumentTab } from "@/types"
 
-interface DocumentTabsProps {
+interface DocumentTabBarProps {
   activeTab: DocumentTab
   onTabChange: (tab: DocumentTab) => void
   showFilePath?: boolean
 }
 
-export function DocumentTabBar({ activeTab, onTabChange, showFilePath = true }: DocumentTabsProps) {
+export function DocumentTabBar({ activeTab, onTabChange, showFilePath = true }: DocumentTabBarProps) {
   return (
     <div className="border-b bg-muted/20 shrink-0">
       <Tabs value={activeTab} onValueChange={(v) => onTabChange(v as DocumentTab)}>

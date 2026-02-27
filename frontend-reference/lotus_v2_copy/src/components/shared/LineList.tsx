@@ -3,7 +3,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { Search, AlertTriangle, CheckCircle2, MessageSquare, XCircle, Plus, Trash2 } from "lucide-react"
+import { Search, Plus, Trash2 } from "lucide-react"
 import type { ConfigLine, LineStatus } from "@/types"
 import { mockLines, getLineStats } from "@/services/mockData"
 
@@ -123,4 +123,3 @@ function StatusDot({ color, count }: { color: string; count: number }) {
   )
 }
 
-export { CheckCircle2, AlertTriangle, MessageSquare, XCircle }

@@ -19,6 +19,8 @@ class MockNetlistQueryService:
         self.canonical_id_map: dict[tuple, frozenset[int]] = {}
         # Maps int -> str for canonical net name display
         self.id_to_name: dict[int, str] = {}
+        # Maps (template, net_name) -> set[str] of instance names
+        self.instance_names_map: dict[tuple[str, str], set[str]] = {}
 
     def find_matches(
         self,
@@ -31,6 +33,10 @@ class MockNetlistQueryService:
         nets = self.net_matches.get(key, [])
         templates = [template_name] if nets and template_name else []
         return nets, templates
+
+    def find_net_instance_names(self, template: str, net_name: str) -> set[str]:
+        """Return configured instance names, or empty set."""
+        return self.instance_names_map.get((template, net_name), set())
 
     def resolve_to_canonical_ids(
         self,

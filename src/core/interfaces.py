@@ -28,6 +28,12 @@ class INetlistQueryService(Protocol):
         net_regex: bool,
     ) -> tuple[list[str], list[str]]: ...
 
+    def find_net_instance_names(
+        self,
+        template: str,
+        net_name: str,
+    ) -> set[str]: ...
+
     def resolve_to_canonical_ids(
         self,
         template: Optional[str],

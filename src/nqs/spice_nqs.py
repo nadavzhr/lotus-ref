@@ -354,6 +354,33 @@ class SpiceNetlistQueryService:
     # ==================================================================
 
     @lru_cache(maxsize=256)
+    def find_net_instance_names(self, template: str, net_name: str) -> set[str]:
+        """Find all top-cell canonical net names for a net in a template.
+
+        This mirrors the original ``NetlistQueryService.find_net_instance_names``
+        method.  Given a template and a net name (which may be an alias),
+        it resolves the canonical name within the template, then maps it
+        through every instance path to produce the set of top-cell
+        canonical net names.
+
+        Args:
+            template: Template name (case-insensitive).
+            net_name: Net name to look up (may be alias or canonical).
+
+        Returns:
+            Set of top-cell canonical net name strings.
+        """
+        normalized = self._normalize_template_name(template)
+        if normalized is None:
+            return set()
+
+        canonical = self._resolve_canonical_net_name(normalized, net_name.lower())
+        if canonical is None:
+            return set()
+
+        return self._find_top_cell_net_names(normalized, canonical)
+
+    @lru_cache(maxsize=256)
     def resolve_to_canonical_ids(
         self,
         template: Optional[str],
@@ -639,33 +666,49 @@ class SpiceNetlistQueryService:
             {k: len(v) for k, v in self._template_instances.items()},
         )
 
+    def _find_top_cell_net_names(
+        self, template: str, canonical_net: str,
+    ) -> set[str]:
+        """Map a template-scoped canonical net to top-cell canonical net names.
+
+        This is the shared core used by both :meth:`find_net_instance_names`
+        (returns names) and :meth:`_resolve_tpl_net_to_top_ids` (returns IDs).
+
+        Args:
+            template: Already-normalized template name.
+            canonical_net: Already-resolved canonical net within *template*.
+
+        Returns:
+            Set of top-cell canonical net name strings.
+        """
+        if template == self._top_cell:
+            return {canonical_net}
+
+        top_alias = self._alias_maps[self._top_cell]
+        paths = self._template_instances.get(template, [])
+        names: set[str] = set()
+        for path in paths:
+            hier = f"{path}/{canonical_net}"
+            top_canonical = top_alias.get(hier)
+            if top_canonical is not None:
+                names.add(top_canonical)
+        return names
+
     @lru_cache(maxsize=8192)
     def _resolve_tpl_net_to_top_ids(self, tpl: str, net: str) -> frozenset[int]:
         """
         Lazily compute the top-cell canonical net IDs for a single
         (template, canonical_net_within_template) pair.
 
-        For the top cell this is a 1:1 identity mapping.  For child
-        templates the net is expanded through every instance path and
-        resolved via the top cell alias map.
+        Delegates to :meth:`_find_top_cell_net_names` for the name
+        resolution, then maps names to integer IDs.
 
         Results are cached so repeated lookups are free.
         """
-        if tpl == self._top_cell:
-            net_id = self._net_id_map.get(net)
-            return frozenset({net_id}) if net_id is not None else frozenset()
-
-        top_alias = self._alias_maps[self._top_cell]
-        paths = self._template_instances.get(tpl, [])
-        ids: set[int] = set()
-        for path in paths:
-            hier = f"{path}/{net}"
-            top_canonical = top_alias.get(hier)
-            if top_canonical is not None:
-                net_id = self._net_id_map.get(top_canonical)
-                if net_id is not None:
-                    ids.add(net_id)
-        return frozenset(ids)
+        names = self._find_top_cell_net_names(tpl, net)
+        return frozenset(
+            self._net_id_map[n] for n in names if n in self._net_id_map
+        )
 
     def _resolve_matching_nets_in_template(
         self, template: str, net_name: str, net_regex: bool,
@@ -805,6 +848,7 @@ class SpiceNetlistQueryService:
                 self._is_closed = True
             self.net_exists.cache_clear()
             self.find_matches.cache_clear()
+            self.find_net_instance_names.cache_clear()
             self.resolve_to_canonical_ids.cache_clear()
             self._resolve_canonical_net_name.cache_clear()
             self._resolve_tpl_net_to_top_ids.cache_clear()

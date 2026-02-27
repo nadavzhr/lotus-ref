@@ -267,6 +267,50 @@ class TestInstancePaths:
         assert len(paths) == 0
 
 
+class TestFindNetInstanceNames:
+    """Test find_net_instance_names — mirrors the original NQS API."""
+
+    def test_top_cell_net_returns_itself(self, nqs):
+        """A top-cell net's instance name is just the net itself."""
+        names = nqs.find_net_instance_names("mycell", "in1")
+        assert names == {"in1"}
+
+    def test_template_port_resolves_through_hierarchy(self, nqs):
+        """D:n3 should map to top-cell canonical nets through all instances."""
+        names = nqs.find_net_instance_names("d", "n3")
+        assert len(names) > 0
+        assert "in1" in names
+
+    def test_alias_resolves_before_lookup(self, nqs):
+        """An alias like ia1/n0 should resolve to canonical before lookup."""
+        names = nqs.find_net_instance_names("mycell", "ia1/n0")
+        assert "in1" in names
+
+    def test_internal_net_maps_to_top_cell_paths(self, nqs):
+        """Internal net d:gd1 should map to top-cell hierarchical paths."""
+        names = nqs.find_net_instance_names("d", "gd1")
+        assert len(names) > 0
+        # Each of D's 4 instances should produce a unique top-cell net
+        for name in names:
+            assert "gd1" in name
+
+    def test_nonexistent_template_returns_empty(self, nqs):
+        names = nqs.find_net_instance_names("nosuch", "n1")
+        assert names == set()
+
+    def test_nonexistent_net_returns_empty(self, nqs):
+        names = nqs.find_net_instance_names("d", "nonexistent")
+        assert names == set()
+
+    def test_consistency_with_resolve_to_canonical_ids(self, nqs):
+        """Instance names should be exactly the names behind the integer IDs."""
+        names = nqs.find_net_instance_names("d", "n3")
+        ids = nqs.resolve_to_canonical_ids("d", "n3", False, False)
+        # Every ID should map to a name in the set
+        id_names = {nqs.canonical_net_name(nid) for nid in ids}
+        assert id_names == names
+
+
 class TestResolveToCanonicalIds:
     """Test the core resolve_to_canonical_ids method."""
 

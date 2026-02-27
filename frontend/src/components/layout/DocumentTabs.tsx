@@ -26,7 +26,7 @@ export function DocumentTabs() {
             >
               <FileText className="h-3.5 w-3.5" />
               {doc.doc_type === "af" ? "Activity Factor" : "Mutex"}
-              {doc.is_modified && (
+              {doc.can_undo && (
                 <Badge
                   variant="outline"
                   className="text-[9px] px-1 py-0 h-3.5 ml-0.5 border-amber-500/30 text-amber-600"

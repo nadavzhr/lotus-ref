@@ -1,10 +1,9 @@
 import type {
-  LinesResponse,
+  DocumentLine,
   DocumentSummary,
   LoadRequest,
   LoadResponse,
   EditSession,
-  SearchResult,
   QueryNetsRequest,
   QueryNetsResponse,
 } from "@/types"
@@ -53,10 +52,10 @@ export function getLines(
   docId: string,
   offset = 0,
   limit?: number,
-): Promise<LinesResponse> {
+): Promise<DocumentLine[]> {
   const params = new URLSearchParams({ offset: String(offset) })
   if (limit !== undefined) params.set("limit", String(limit))
-  return request<LinesResponse>(`/documents/${docId}/lines?${params}`)
+  return request<DocumentLine[]>(`/documents/${docId}/lines?${params}`)
 }
 
 export function getLine(docId: string, position: number): Promise<unknown> {
@@ -93,11 +92,11 @@ export function searchLines(
   q: string,
   regex = false,
   status?: string,
-): Promise<SearchResult> {
+): Promise<DocumentLine[]> {
   const params = new URLSearchParams({ q })
   if (regex) params.set("regex", "true")
   if (status) params.set("status", status)
-  return request<SearchResult>(`/documents/${docId}/search?${params}`)
+  return request<DocumentLine[]>(`/documents/${docId}/search?${params}`)
 }
 
 /* ── Edit Sessions ─────────────────────────────────────────────────── */

@@ -49,19 +49,18 @@ function deriveProblems(lines: DocumentLine[], filePath: string): Problem[] {
     for (const warn of line.warnings) {
       problems.push({ type: "warning", message: warn, line: line.position + 1, file: filePath })
     }
-    for (const c of line.conflicts) {
-      problems.push({ type: "conflict", message: c, line: line.position + 1, file: filePath })
+    if (line.conflict_info) {
+      const shared = line.conflict_info.shared_nets.join(", ")
+      const positions = line.conflict_info.conflicting_positions.map((p) => p + 1).join(", ")
+      problems.push({
+        type: "conflict",
+        message: `Conflict on nets [${shared}] with lines: ${positions}`,
+        line: line.position + 1,
+        file: filePath,
+      })
     }
   }
   return problems
-}
-
-function deriveStatus(line: DocumentLine): DocumentLine["status"] {
-  if (line.is_comment) return "comment"
-  if (line.errors.length > 0) return "error"
-  if (line.conflicts.length > 0) return "conflict"
-  if (line.warnings.length > 0) return "warning"
-  return "valid"
 }
 
 export function DocumentProvider({ children }: { children: ReactNode }) {
@@ -96,14 +95,13 @@ export function DocumentProvider({ children }: { children: ReactNode }) {
     if (!activeDocId) return
     setLoading(true)
     try {
-      const res = await api.getLines(activeDocId)
-      const enriched = res.lines.map((l) => ({ ...l, status: deriveStatus(l) }))
-      setLines(enriched)
-      setTotalLines(res.total)
+      const lineList = await api.getLines(activeDocId)
+      setLines(lineList)
+      setTotalLines(lineList.length)
 
       const doc = documents.find((d) => d.doc_id === activeDocId)
       const filePath = doc?.file_path ?? activeDocId
-      setProblems(deriveProblems(enriched, filePath))
+      setProblems(deriveProblems(lineList, filePath))
       setError(null)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
@@ -119,7 +117,7 @@ export function DocumentProvider({ children }: { children: ReactNode }) {
       setLoading(true)
       try {
         const res = await api.loadDocument({ doc_id: docId, file_path: filePath, doc_type: docType })
-        addLog("INFO", `Loaded ${docType} document: ${filePath} (${res.line_count} lines)`)
+        addLog("INFO", `Loaded ${docType} document: ${filePath} (${res.total_lines} lines)`)
         setActiveDocId(docId)
         setActiveDocType(docType)
         await refreshDocuments()

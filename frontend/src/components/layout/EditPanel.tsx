@@ -99,13 +99,13 @@ function TemplateNetSearch({
             <TabsTrigger value="nets" className="text-[10px] h-5">
               Nets{" "}
               <Badge variant="secondary" className="ml-1 text-[9px] px-1 py-0 h-3.5">
-                {results.net_count}
+                {results.nets.length}
               </Badge>
             </TabsTrigger>
             <TabsTrigger value="templates" className="text-[10px] h-5">
               Templates{" "}
               <Badge variant="secondary" className="ml-1 text-[9px] px-1 py-0 h-3.5">
-                {results.template_count}
+                {results.templates.length}
               </Badge>
             </TabsTrigger>
           </TabsList>
@@ -166,10 +166,10 @@ function AFEditForm({
   session: EditSession
   onFieldChange: (fields: Record<string, unknown>) => void
 }) {
-  const fields = session.fields
-  const af = (fields.activity_factor as number) ?? 0
-  const em = (fields.em as boolean) ?? false
-  const sh = (fields.sh as boolean) ?? false
+  const data = session.data
+  const af = (data.af_value as number) ?? 0
+  const em = (data.is_em_enabled as boolean) ?? false
+  const sh = (data.is_sh_enabled as boolean) ?? false
 
   return (
     <div className="p-4 space-y-4">
@@ -189,7 +189,7 @@ function AFEditForm({
             className="h-8 text-xs font-mono w-28"
             value={af}
             onChange={(e) =>
-              onFieldChange({ ...fields, activity_factor: parseFloat(e.target.value) || 0 })
+              onFieldChange({ ...data, af_value: parseFloat(e.target.value) || 0 })
             }
           />
         </div>
@@ -198,7 +198,7 @@ function AFEditForm({
             variant={em ? "default" : "outline"}
             size="sm"
             className="h-8 text-xs gap-1.5"
-            onClick={() => onFieldChange({ ...fields, em: !em })}
+            onClick={() => onFieldChange({ ...data, is_em_enabled: !em })}
           >
             <ToggleLeft className="h-3.5 w-3.5" /> EM
           </Button>
@@ -206,7 +206,7 @@ function AFEditForm({
             variant={sh ? "default" : "outline"}
             size="sm"
             className="h-8 text-xs gap-1.5"
-            onClick={() => onFieldChange({ ...fields, sh: !sh })}
+            onClick={() => onFieldChange({ ...data, is_sh_enabled: !sh })}
           >
             <ToggleLeft className="h-3.5 w-3.5" /> SH
           </Button>
@@ -228,9 +228,9 @@ function MutexEditForm({
   position: number
   onRefresh: () => void
 }) {
-  const fields = session.fields
-  const mutexedNets = (fields.mutexed_nets as string[]) ?? []
-  const activeNets = (fields.active_nets as string[]) ?? []
+  const data = session.data
+  const mutexedNets = (data.mutexed_nets as string[]) ?? []
+  const activeNets = (data.active_nets as string[]) ?? []
 
   const handleAddMutexed = useCallback(
     async (net: string) => {
@@ -375,10 +375,12 @@ function MutexEditForm({
 
 /* ── Right Panel ──────────────────────────────────────────────────────── */
 export function EditPanel({ selectedLine }: EditPanelProps) {
-  const { activeDocId, activeDocType, refreshLines, addLog } = useDocumentStore()
+  const { activeDocId, activeDocType, lines, refreshLines, addLog } = useDocumentStore()
   const [session, setSession] = useState<EditSession | null>(null)
   const [sessionLoading, setSessionLoading] = useState(false)
   const [dirty, setDirty] = useState(false)
+
+  const activeLine = lines.find((l) => l.position === selectedLine) ?? null
 
   // Hydrate session when a line is selected
   useEffect(() => {
@@ -488,12 +490,14 @@ export function EditPanel({ selectedLine }: EditPanelProps) {
   }
 
   const statusColor: Record<string, string> = {
-    valid: "bg-emerald-500/15 text-emerald-700 border-emerald-500/20 hover:bg-emerald-500/20",
+    ok: "bg-emerald-500/15 text-emerald-700 border-emerald-500/20 hover:bg-emerald-500/20",
     warning: "bg-amber-500/15 text-amber-700 border-amber-500/20 hover:bg-amber-500/20",
     error: "bg-red-500/15 text-red-700 border-red-500/20 hover:bg-red-500/20",
     comment: "bg-muted text-muted-foreground border-muted",
     conflict: "bg-purple-500/15 text-purple-700 border-purple-500/20 hover:bg-purple-500/20",
   }
+
+  const lineStatus = activeLine?.status ?? "ok"
 
   return (
     <div className="flex flex-col h-full">
@@ -504,10 +508,10 @@ export function EditPanel({ selectedLine }: EditPanelProps) {
             Line {selectedLine + 1}
           </Badge>
           <Badge
-            className={`text-[10px] ${statusColor[session.status] ?? ""}`}
+            className={`text-[10px] ${statusColor[lineStatus] ?? ""}`}
             variant="outline"
           >
-            {session.status}
+            {lineStatus}
           </Badge>
           {dirty && (
             <Badge variant="outline" className="text-[10px] border-amber-500/30 text-amber-600">
@@ -563,8 +567,8 @@ export function EditPanel({ selectedLine }: EditPanelProps) {
             <textarea
               className="flex-1 w-full rounded-md border bg-transparent px-3 py-2 text-xs font-mono ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-none"
               placeholder="# Enter raw text…"
-              value={session.raw_text}
-              onChange={(e) => handleFieldChange({ ...session.fields, raw_text: e.target.value })}
+              value={activeLine?.raw_text ?? ""}
+              readOnly
             />
           </div>
         </TabsContent>

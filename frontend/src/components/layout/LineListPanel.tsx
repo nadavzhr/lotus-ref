@@ -31,7 +31,7 @@ const statusConfig: Record<
   LineStatus,
   { dot: string; icon: typeof CheckCircle2 }
 > = {
-  valid: { dot: "bg-emerald-500", icon: CheckCircle2 },
+  ok: { dot: "bg-emerald-500", icon: CheckCircle2 },
   warning: { dot: "bg-amber-500", icon: AlertTriangle },
   error: { dot: "bg-red-500", icon: XCircle },
   comment: { dot: "bg-muted-foreground/50", icon: MessageSquare },
@@ -55,9 +55,9 @@ export function LineListPanel({ selectedLine, onSelectLine }: LineListPanelProps
   }, [lines, filter])
 
   const statusCounts = useMemo(() => {
-    const counts = { valid: 0, warning: 0, error: 0, comment: 0, conflict: 0 }
+    const counts = { ok: 0, warning: 0, error: 0, comment: 0, conflict: 0 }
     for (const l of lines) {
-      counts[l.status]++
+      if (l.status in counts) counts[l.status]++
     }
     return counts
   }, [lines])
@@ -88,7 +88,7 @@ export function LineListPanel({ selectedLine, onSelectLine }: LineListPanelProps
         <div className="ml-auto flex gap-1.5">
           <div className="flex items-center gap-1">
             <div className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-            <span className="text-[10px] text-muted-foreground">{statusCounts.valid}</span>
+            <span className="text-[10px] text-muted-foreground">{statusCounts.ok}</span>
           </div>
           <div className="flex items-center gap-1">
             <div className="h-1.5 w-1.5 rounded-full bg-amber-500" />
@@ -173,7 +173,7 @@ export function LineListPanel({ selectedLine, onSelectLine }: LineListPanelProps
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={() => toggleComment(line.position)}>
-                      {line.is_comment ? (
+                      {line.status === "comment" ? (
                         <>
                           <MessageSquareOff className="h-3.5 w-3.5 mr-2" /> Uncomment
                         </>

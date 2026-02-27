@@ -1,25 +1,22 @@
 /* ── Line statuses ─────────────────────────────────────────────────────── */
-export type LineStatus = "valid" | "warning" | "error" | "comment" | "conflict"
+export type LineStatus = "ok" | "warning" | "error" | "comment" | "conflict"
+
+/* ── Conflict info ────────────────────────────────────────────────────── */
+export interface ConflictInfo {
+  conflicting_positions: number[]
+  shared_nets: string[]
+}
 
 /* ── Document line as returned by GET /api/documents/{id}/lines ─────── */
 export interface DocumentLine {
   position: number
   raw_text: string
   status: LineStatus
-  is_comment: boolean
-  fields: Record<string, unknown>
   errors: string[]
   warnings: string[]
-  conflicts: string[]
-}
-
-/* ── Lines response (paginated) ───────────────────────────────────────── */
-export interface LinesResponse {
-  doc_id: string
-  total: number
-  offset: number
-  limit: number | null
-  lines: DocumentLine[]
+  has_data: boolean
+  conflict_info: ConflictInfo | null
+  data?: Record<string, unknown>
 }
 
 /* ── Document summary from GET /api/documents ──────────────────────── */
@@ -27,8 +24,10 @@ export interface DocumentSummary {
   doc_id: string
   doc_type: string
   file_path: string
-  line_count: number
-  is_modified: boolean
+  total_lines: number
+  status_counts: Record<string, number>
+  can_undo: boolean
+  can_redo: boolean
 }
 
 /* ── Load request/response ─────────────────────────────────────────── */
@@ -42,18 +41,17 @@ export interface LoadResponse {
   doc_id: string
   doc_type: string
   file_path: string
-  line_count: number
+  total_lines: number
+  status_counts: Record<string, number>
+  can_undo: boolean
+  can_redo: boolean
 }
 
 /* ── Edit session (hydrate response) ──────────────────────────────── */
 export interface EditSession {
   position: number
-  fields: Record<string, unknown>
-  raw_text: string
-  status: LineStatus
-  errors: string[]
-  warnings: string[]
-  validation: Record<string, unknown>
+  doc_type: string
+  data: Record<string, unknown>
 }
 
 /* ── Search result ────────────────────────────────────────────────── */
@@ -73,16 +71,6 @@ export interface QueryNetsRequest {
 export interface QueryNetsResponse {
   nets: string[]
   templates: string[]
-  net_count: number
-  template_count: number
-}
-
-/* ── Mutex session state ──────────────────────────────────────────── */
-export interface MutexSession {
-  mutexed_nets: string[]
-  active_nets: string[]
-  fev: string
-  num_active: number
 }
 
 /* ── Problem (derived from line errors/warnings/conflicts) ─────────── */

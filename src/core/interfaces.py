@@ -28,6 +28,19 @@ class INetlistQueryService(Protocol):
         net_regex: bool,
     ) -> tuple[list[str], list[str]]: ...
 
+    def resolve_to_canonical_ids(
+        self,
+        template: Optional[str],
+        net_name: str,
+        template_regex: bool,
+        net_regex: bool,
+    ) -> frozenset[int]: ...
+
+    def canonical_net_name(
+        self,
+        net_id: int,
+    ) -> Optional[str]: ...
+
     def get_canonical_net_name(
         self,
         net_name: str,

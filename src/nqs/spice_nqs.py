@@ -8,6 +8,7 @@ dependencies beyond the standard library.
 """
 import re
 import sqlite3
+from collections import defaultdict
 from pathlib import Path
 from threading import RLock
 from functools import lru_cache
@@ -262,6 +263,12 @@ class SpiceNetlistQueryService:
 
         # SQLite for efficient search
         self._init_database()
+
+        # Canonical net ID infrastructure for conflict detection
+        self._build_canonical_id_table()
+        self._build_instance_paths()
+        self._build_template_net_to_top_ids()
+
         logger.info("SpiceNetlistQueryService ready (top cell: %s)", self._top_cell)
 
     # ==================================================================
@@ -342,6 +349,55 @@ class SpiceNetlistQueryService:
         )
 
         return matching_nets_sorted, matched_templates
+
+    # ==================================================================
+    # CANONICAL NET ID — CONFLICT DETECTION
+    # ==================================================================
+
+    @lru_cache(maxsize=256)
+    def resolve_to_canonical_ids(
+        self,
+        template: Optional[str],
+        net_name: str,
+        template_regex: bool,
+        net_regex: bool,
+    ) -> frozenset[int]:
+        """
+        Resolve a rule pattern to top-cell canonical net IDs.
+
+        This is the primary entry point for conflict detection.  Given a
+        template/net pattern (with optional regex flags), it finds all
+        matching nets and maps them through the hierarchy to their
+        top-cell canonical net IDs (integers).
+
+        Returns a frozenset of integer canonical net IDs.
+        """
+        if not net_name:
+            return frozenset()
+
+        tpl_name = (template or self._top_cell)
+        tpl_name = tpl_name.lower() if not template_regex else tpl_name
+        net_norm = net_name.lower() if not net_regex else net_name
+
+        matching_templates = self._get_matching_templates(tpl_name, template_regex)
+        if not matching_templates:
+            return frozenset()
+
+        result_ids: set[int] = set()
+        for tpl in matching_templates:
+            resolved = self._resolve_matching_nets_in_template(
+                tpl, net_norm, net_regex,
+            )
+            for net in resolved:
+                ids = self._tpl_net_to_top.get((tpl, net))
+                if ids:
+                    result_ids.update(ids)
+
+        return frozenset(result_ids)
+
+    def canonical_net_name(self, net_id: int) -> Optional[str]:
+        """Return the canonical net name string for a given integer ID."""
+        return self._id_net_map.get(net_id)
 
     # ==================================================================
     # STATIC / CLASS METHODS
@@ -549,6 +605,110 @@ class SpiceNetlistQueryService:
         ]
 
     # ==================================================================
+    # CANONICAL NET ID — BUILD METHODS
+    # ==================================================================
+
+    def _build_canonical_id_table(self) -> None:
+        """Assign integer IDs to all top-cell canonical nets."""
+        top_canonical = sorted(self._canonical_nets[self._top_cell])
+        self._net_id_map: dict[str, int] = {
+            name: i for i, name in enumerate(top_canonical)
+        }
+        self._id_net_map: dict[int, str] = dict(enumerate(top_canonical))
+        logger.debug(
+            "Canonical net ID table: %d top-cell nets", len(self._net_id_map),
+        )
+
+    def _build_instance_paths(self) -> None:
+        """Build mapping: template → list of instance paths in top cell hierarchy."""
+        self._template_instances: dict[str, list[str]] = defaultdict(list)
+
+        def traverse(template: str, prefix: str) -> None:
+            defn = self._subckts.get(template)
+            if defn is None:
+                return
+            for inst in defn.instances:
+                path = f"{prefix}/{inst.inst_name}" if prefix else inst.inst_name
+                child = inst.subckt_name
+                if child in self._subckts:
+                    self._template_instances[child].append(path)
+                    traverse(child, path)
+
+        traverse(self._top_cell, "")
+        logger.debug(
+            "Instance paths: %s",
+            {k: len(v) for k, v in self._template_instances.items()},
+        )
+
+    def _build_template_net_to_top_ids(self) -> None:
+        """
+        Build mapping: (template, canonical_net_within_template) → frozenset
+        of top-cell canonical net IDs.
+
+        For the top cell this is a 1:1 identity mapping.  For child
+        templates each canonical net is expanded through every instance
+        path and resolved via the top cell alias map.
+        """
+        self._tpl_net_to_top: dict[tuple[str, str], frozenset[int]] = {}
+        top_alias = self._alias_maps[self._top_cell]
+
+        for tpl in self._all_templates:
+            if tpl == self._top_cell:
+                for net in self._canonical_nets[tpl]:
+                    net_id = self._net_id_map.get(net)
+                    if net_id is not None:
+                        self._tpl_net_to_top[(tpl, net)] = frozenset({net_id})
+                continue
+
+            paths = self._template_instances.get(tpl, [])
+            for net in self._canonical_nets[tpl]:
+                ids: set[int] = set()
+                for path in paths:
+                    hier = f"{path}/{net}"
+                    top_canonical = top_alias.get(hier)
+                    if top_canonical is not None:
+                        net_id = self._net_id_map.get(top_canonical)
+                        if net_id is not None:
+                            ids.add(net_id)
+                if ids:
+                    self._tpl_net_to_top[(tpl, net)] = frozenset(ids)
+
+    def _resolve_matching_nets_in_template(
+        self, template: str, net_name: str, net_regex: bool,
+    ) -> set[str]:
+        """
+        Find canonical nets within *template* that match *net_name*.
+
+        Returns a set of canonical-within-template net names.
+        """
+        if net_regex:
+            results = self._execute_sql_query(
+                """SELECT n.net_name FROM nets n
+                   JOIN templates t ON n.template_id = t.id
+                   WHERE t.name = ? AND n.net_name REGEXP ?""",
+                (template, net_name),
+            )
+            return {row[0] for row in results}
+
+        if self.has_bus_notation(net_name):
+            try:
+                expanded = self.expand_bus_notation(
+                    net_name, max_expansions=self.MAX_BUS_EXPANSION,
+                )
+            except ValueError:
+                return set()
+            resolved: set[str] = set()
+            for name in expanded:
+                canonical = self._resolve_canonical_net_name(template, name)
+                if canonical:
+                    resolved.add(canonical)
+            return resolved
+
+        # Exact match (with alias resolution)
+        canonical = self._resolve_canonical_net_name(template, net_name)
+        return {canonical} if canonical else set()
+
+    # ==================================================================
     # SQLITE DATABASE
     # ==================================================================
 
@@ -651,6 +811,7 @@ class SpiceNetlistQueryService:
                 self._is_closed = True
             self.net_exists.cache_clear()
             self.find_matches.cache_clear()
+            self.resolve_to_canonical_ids.cache_clear()
             self._resolve_canonical_net_name.cache_clear()
 
     def __del__(self):

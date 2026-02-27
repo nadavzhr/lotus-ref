@@ -2,11 +2,15 @@
 ConflictStore — efficient conflict detection between document lines.
 
 A conflict occurs when two or more lines resolve to overlapping sets
-of instance nets.  The store maintains two indexes for close-to-O(1)
-lookups:
+of canonical net IDs (integers).  The store maintains two indexes for
+close-to-O(1) lookups:
 
-- ``_line_nets[line_id]``  → frozenset of nets the line covers
-- ``_net_lines[net]``      → set of line_ids that cover that net
+- ``_line_nets[line_id]``  → frozenset of canonical net IDs
+- ``_net_lines[net_id]``   → set of line_ids that cover that net
+
+Canonical net IDs are integers assigned by the NQS at startup.
+String names are stored once in the NQS and resolved only for UI
+display, keeping the core indexes compact and cache-friendly.
 
 All mutations are incremental: updating or removing a single line
 touches only the nets that line previously/newly covers, so no full
@@ -15,12 +19,12 @@ rebuild is needed for single-line edits.
 Usage::
 
     store = ConflictStore()
-    store.update_line("line-1", {"vdd", "vss"})
-    store.update_line("line-2", {"vdd", "gnd"})
+    store.update_line("line-1", frozenset({100, 200}))
+    store.update_line("line-2", frozenset({100, 300}))
 
-    store.is_conflicting("line-1")          # True
-    store.get_conflicting_lines("line-1")   # {"line-2"}
-    store.get_conflicting_nets("line-1")    # {"vdd"}
+    store.is_conflicting("line-1")              # True
+    store.get_conflicting_lines("line-1")       # {"line-2"}
+    store.get_conflicting_net_ids("line-1")     # {100}
 """
 from __future__ import annotations
 
@@ -35,25 +39,25 @@ if TYPE_CHECKING:
 
 class ConflictStore:
     """
-    Maintains a bidirectional index of line ↔ net relationships and
-    exposes efficient conflict queries.
+    Maintains a bidirectional index of line ↔ canonical-net-ID
+    relationships and exposes efficient conflict queries.
     """
 
     __slots__ = ("_line_nets", "_net_lines")
 
     def __init__(self) -> None:
-        # line_id → frozenset of net names
-        self._line_nets: dict[str, frozenset[str]] = {}
-        # net_name → set of line_ids
-        self._net_lines: dict[str, set[str]] = {}
+        # line_id → frozenset of canonical net IDs (integers)
+        self._line_nets: dict[str, frozenset[int]] = {}
+        # canonical_net_id → set of line_ids
+        self._net_lines: dict[int, set[str]] = {}
 
     # ------------------------------------------------------------------
     # Mutations
     # ------------------------------------------------------------------
 
-    def update_line(self, line_id: str, nets: set[str] | frozenset[str]) -> None:
+    def update_line(self, line_id: str, nets: set[int] | frozenset[int]) -> None:
         """
-        Set (or replace) the nets for *line_id*.
+        Set (or replace) the canonical net IDs for *line_id*.
 
         If the line already existed, its old nets are first removed from
         the reverse index, then the new nets are inserted.  This is the
@@ -109,28 +113,28 @@ class ConflictStore:
         result.discard(line_id)
         return result
 
-    def get_conflicting_nets(self, line_id: str) -> set[str]:
-        """Return the nets that *line_id* shares with at least one other line."""
+    def get_conflicting_net_ids(self, line_id: str) -> frozenset[int]:
+        """Return the canonical net IDs that *line_id* shares with at least one other line."""
         nets = self._line_nets.get(line_id)
         if not nets:
-            return set()
-        result: set[str] = set()
+            return frozenset()
+        result: set[int] = set()
         for net in nets:
             owners = self._net_lines.get(net)
             if owners and len(owners) > 1:
                 result.add(net)
-        return result
+        return frozenset(result)
 
     def get_conflict_info(self, line_id: str) -> Optional["ConflictInfo"]:
         """
         Return a :class:`ConflictInfo` for *line_id*, or ``None`` if the
         line is not in conflict.
         """
-        nets = self.get_conflicting_nets(line_id)
-        if not nets:
+        net_ids = self.get_conflicting_net_ids(line_id)
+        if not net_ids:
             return None
         lines = self.get_conflicting_lines(line_id)
-        return ConflictInfo(conflicting_line_ids=lines, shared_nets=nets)
+        return ConflictInfo(conflicting_line_ids=lines, shared_net_ids=net_ids)
 
     # ------------------------------------------------------------------
     # Internals
@@ -153,7 +157,7 @@ class ConflictStore:
 class ConflictInfo:
     """Lightweight snapshot of conflict data for a single line."""
     conflicting_line_ids: set[str]
-    shared_nets: set[str]
+    shared_net_ids: frozenset[int]
 
 
 # ------------------------------------------------------------------
@@ -163,32 +167,31 @@ class ConflictInfo:
 def resolve_line_nets(
     data: "AfLineData | MutexLineData",
     nqs: "INetlistQueryService",
-) -> frozenset[str]:
+) -> frozenset[int]:
     """
-    Resolve the set of canonical instance-net names that *data* covers,
-    using the existing ``find_matches`` functionality on *nqs*.
+    Resolve the set of top-cell canonical net IDs that *data* covers,
+    using ``resolve_to_canonical_ids`` on *nqs*.
 
-    Returns a frozenset of fully qualified net names (e.g. ``"template:net"``
-    or bare ``"net"`` for the top cell).
+    Returns a frozenset of integer canonical net IDs.
     """
     from doc_types.af.line_data import AfLineData
     from doc_types.mutex.line_data import MutexLineData
 
     if isinstance(data, AfLineData):
-        nets, _ = nqs.find_matches(
+        return nqs.resolve_to_canonical_ids(
             data.template, data.net,
             data.is_template_regex, data.is_net_regex,
         )
-        return frozenset(nets)
 
     if isinstance(data, MutexLineData):
-        all_nets: set[str] = set()
+        all_ids: set[int] = set()
         for net in data.mutexed_nets:
-            matched, _ = nqs.find_matches(
-                data.template, net,
-                False, data.is_regexp,
+            all_ids.update(
+                nqs.resolve_to_canonical_ids(
+                    data.template, net,
+                    False, data.is_regexp,
+                )
             )
-            all_nets.update(matched)
-        return frozenset(all_nets)
+        return frozenset(all_ids)
 
     return frozenset()

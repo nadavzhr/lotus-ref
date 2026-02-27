@@ -15,6 +15,10 @@ class MockNetlistQueryService:
         self.canonical_map: dict[tuple[str, Optional[str]], str] = {}
         # Set of known template names
         self.templates: set[str] = set()
+        # Maps (template, net_name, net_regex) -> frozenset[int] of canonical IDs
+        self.canonical_id_map: dict[tuple, frozenset[int]] = {}
+        # Maps int -> str for canonical net name display
+        self.id_to_name: dict[int, str] = {}
 
     def find_matches(
         self,
@@ -27,6 +31,19 @@ class MockNetlistQueryService:
         nets = self.net_matches.get(key, [])
         templates = [template_name] if nets and template_name else []
         return nets, templates
+
+    def resolve_to_canonical_ids(
+        self,
+        template: Optional[str],
+        net_name: str,
+        template_regex: bool,
+        net_regex: bool,
+    ) -> frozenset[int]:
+        key = (template, net_name, net_regex)
+        return self.canonical_id_map.get(key, frozenset())
+
+    def canonical_net_name(self, net_id: int) -> Optional[str]:
+        return self.id_to_name.get(net_id)
 
     def get_canonical_net_name(
         self, net_name: str, template_name: Optional[str] = None

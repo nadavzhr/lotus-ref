@@ -61,14 +61,14 @@ class DocumentService:
         """Return all lines in a document as JSON-friendly dicts."""
         doc = self._documents[doc_id]
         store = self._conflict_stores.get(doc_id)
-        return [self._serialize_line(i, line, store) for i, line in enumerate(doc.lines)]
+        return [self._serialize_line(i, line, store, self._nqs) for i, line in enumerate(doc.lines)]
 
     def get_line(self, doc_id: str, line_id: str) -> dict:
         doc = self._documents[doc_id]
         line = doc.get_line(line_id)
         pos = doc.get_position(line_id)
         store = self._conflict_stores.get(doc_id)
-        return self._serialize_line(pos, line, store)
+        return self._serialize_line(pos, line, store, self._nqs)
 
     # ------------------------------------------------------------------
     # Edit flow
@@ -137,7 +137,7 @@ class DocumentService:
 
         pos = doc.get_position(line_id)
         store = self._conflict_stores.get(doc_id)
-        return self._serialize_line(pos, new_line, store)
+        return self._serialize_line(pos, new_line, store, self._nqs)
 
     # ------------------------------------------------------------------
     # Save
@@ -233,7 +233,7 @@ class DocumentService:
 
         pos = doc.get_position(line_id)
         store = self._conflict_stores.get(doc_id)
-        return self._serialize_line(pos, new_line, store)
+        return self._serialize_line(pos, new_line, store, self._nqs)
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -262,6 +262,7 @@ class DocumentService:
         position: int,
         line: DocumentLine,
         conflict_store: Optional[ConflictStore] = None,
+        nqs: Optional[INetlistQueryService] = None,
     ) -> dict:
         vr = line.validation_result
         status = line.status.value
@@ -272,9 +273,17 @@ class DocumentService:
             info = conflict_store.get_conflict_info(line.line_id)
             if info is not None:
                 status = LineStatus.CONFLICT.value
+                # Convert integer canonical net IDs to human-readable names
+                if nqs is not None:
+                    shared_nets = sorted(
+                        nqs.canonical_net_name(nid) or f"net#{nid}"
+                        for nid in info.shared_net_ids
+                    )
+                else:
+                    shared_nets = sorted(str(nid) for nid in info.shared_net_ids)
                 conflict_info = {
                     "conflicting_line_ids": sorted(info.conflicting_line_ids),
-                    "shared_nets": sorted(info.shared_nets),
+                    "shared_nets": shared_nets,
                 }
 
         result = {

@@ -212,3 +212,148 @@ class TestLifecycle:
     def test_cell_not_found(self):
         with pytest.raises(RuntimeError, match="not found"):
             SpiceNetlistQueryService(cell="nosuchcell", spice_file=_SPICE_FILE)
+
+
+# ==================================================================
+# Canonical net ID resolution
+# ==================================================================
+
+class TestCanonicalIdTable:
+    """Verify the canonical ID infrastructure is built correctly."""
+
+    def test_net_id_map_covers_all_top_cell_nets(self, nqs):
+        """Every top-cell canonical net should have an integer ID."""
+        top_canonical = nqs._canonical_nets[nqs._top_cell]
+        assert len(nqs._net_id_map) == len(top_canonical)
+        for name in top_canonical:
+            assert name in nqs._net_id_map
+
+    def test_id_net_map_is_inverse(self, nqs):
+        """id_net_map should be the exact inverse of net_id_map."""
+        for name, nid in nqs._net_id_map.items():
+            assert nqs._id_net_map[nid] == name
+        for nid, name in nqs._id_net_map.items():
+            assert nqs._net_id_map[name] == nid
+
+    def test_canonical_net_name_method(self, nqs):
+        """canonical_net_name() returns the name for a known ID."""
+        nid = nqs._net_id_map["in1"]
+        assert nqs.canonical_net_name(nid) == "in1"
+
+    def test_canonical_net_name_unknown(self, nqs):
+        assert nqs.canonical_net_name(999999) is None
+
+
+class TestInstancePaths:
+    """Verify _template_instances is built correctly."""
+
+    def test_leaf_template_has_instances(self, nqs):
+        """D is instantiated 4 times (2 per C × 2 C instances)."""
+        paths = nqs._template_instances.get("d", [])
+        assert len(paths) == 4
+        assert "ia1/ib/ic/id1" in paths
+        assert "ia1/ib/ic/id2" in paths
+        assert "ia2/ib/ic/id1" in paths
+        assert "ia2/ib/ic/id2" in paths
+
+    def test_mid_template_has_instances(self, nqs):
+        paths = nqs._template_instances.get("c", [])
+        assert len(paths) == 2
+        assert "ia1/ib/ic" in paths
+        assert "ia2/ib/ic" in paths
+
+    def test_top_cell_has_no_instances(self, nqs):
+        paths = nqs._template_instances.get("mycell", [])
+        assert len(paths) == 0
+
+
+class TestResolveToCanonicalIds:
+    """Test the core resolve_to_canonical_ids method."""
+
+    def test_top_cell_net_resolves(self, nqs):
+        """A direct top-cell net like 'in1' should resolve to exactly one ID."""
+        ids = nqs.resolve_to_canonical_ids(None, "in1", False, False)
+        assert len(ids) == 1
+        nid = next(iter(ids))
+        assert nqs.canonical_net_name(nid) == "in1"
+
+    def test_alias_resolves_to_canonical(self, nqs):
+        """Hierarchical alias 'ia1/ib/n1' should resolve to 'in1'."""
+        ids = nqs.resolve_to_canonical_ids(None, "ia1/ib/n1", False, False)
+        assert len(ids) == 1
+        nid = next(iter(ids))
+        assert nqs.canonical_net_name(nid) == "in1"
+
+    def test_template_net_resolves_through_hierarchy(self, nqs):
+        """
+        {D:n3} should resolve to multiple top-cell canonical nets because
+        D is instantiated 4 times. n3 is a port of D.
+        """
+        ids = nqs.resolve_to_canonical_ids("d", "n3", False, False)
+        assert len(ids) > 0
+        # n3 in D at ia1/ib/ic/id1 connects to C:n2, B:n1, A:n0, mycell:in1
+        in1_id = nqs._net_id_map["in1"]
+        assert in1_id in ids
+
+    def test_hierarchical_conflict_d_n3_vs_c_n2(self, nqs):
+        """
+        {D:n3} and {C:n2} must share at least one canonical net ID.
+        This is the fundamental hierarchical conflict scenario.
+        """
+        d_ids = nqs.resolve_to_canonical_ids("d", "n3", False, False)
+        c_ids = nqs.resolve_to_canonical_ids("c", "n2", False, False)
+        overlap = d_ids & c_ids
+        assert len(overlap) > 0, (
+            f"D:n3 and C:n2 should share canonical nets but don't.\n"
+            f"D:n3 IDs: {sorted(d_ids)}\n"
+            f"C:n2 IDs: {sorted(c_ids)}"
+        )
+
+    def test_hierarchical_conflict_d_n3_vs_b_n1(self, nqs):
+        """{D:n3} and {B:n1} must share canonical nets (through hierarchy)."""
+        d_ids = nqs.resolve_to_canonical_ids("d", "n3", False, False)
+        b_ids = nqs.resolve_to_canonical_ids("b", "n1", False, False)
+        overlap = d_ids & b_ids
+        assert len(overlap) > 0
+
+    def test_hierarchical_conflict_c_n2_vs_b_n1(self, nqs):
+        """{C:n2} and {B:n1} must share canonical nets."""
+        c_ids = nqs.resolve_to_canonical_ids("c", "n2", False, False)
+        b_ids = nqs.resolve_to_canonical_ids("b", "n1", False, False)
+        overlap = c_ids & b_ids
+        assert len(overlap) > 0
+
+    def test_hierarchical_conflict_d_n3_vs_top_in1(self, nqs):
+        """
+        {D:n3} should conflict with top-cell {in1} — the
+        template-scoped net resolves through the hierarchy to the same
+        physical net.
+        """
+        d_ids = nqs.resolve_to_canonical_ids("d", "n3", False, False)
+        top_ids = nqs.resolve_to_canonical_ids(None, "in1", False, False)
+        overlap = d_ids & top_ids
+        assert len(overlap) > 0
+
+    def test_no_conflict_between_unrelated_nets(self, nqs):
+        """Internal net d:gd1 should not overlap with top-cell in2."""
+        d_gd1_ids = nqs.resolve_to_canonical_ids("d", "gd1", False, False)
+        in2_ids = nqs.resolve_to_canonical_ids(None, "in2", False, False)
+        overlap = d_gd1_ids & in2_ids
+        assert len(overlap) == 0
+
+    def test_regex_resolves(self, nqs):
+        """Regex pattern should resolve through hierarchy."""
+        ids = nqs.resolve_to_canonical_ids("d", "n.*", False, True)
+        assert len(ids) > 0
+        # Should include n3 resolutions
+        in1_id = nqs._net_id_map["in1"]
+        assert in1_id in ids
+
+    def test_empty_net_returns_empty(self, nqs):
+        assert nqs.resolve_to_canonical_ids(None, "", False, False) == frozenset()
+
+    def test_nonexistent_template_returns_empty(self, nqs):
+        assert nqs.resolve_to_canonical_ids("nosuch", "n1", False, False) == frozenset()
+
+    def test_nonexistent_net_returns_empty(self, nqs):
+        assert nqs.resolve_to_canonical_ids("d", "nonexistent", False, False) == frozenset()

@@ -28,10 +28,10 @@ class TestMutexParserSuccess:
         data = mutex_parser.parse("mutex2 regular net1 net2")
         assert data.num_active == 2
         assert data.fev == FEVMode.EMPTY
-        assert data.is_regexp is False
+        assert data.is_net_regex is False
         assert data.template is None
-        assert data.mutexed_nets == ["net1", "net2"]
-        assert data.active_nets == []
+        assert data.mutexed_nets == ("net1", "net2")
+        assert data.active_nets == ()
 
     def test_with_fev_suffix(self):
         data = mutex_parser.parse("mutex2_low regular net1 net2")
@@ -43,21 +43,21 @@ class TestMutexParserSuccess:
 
     def test_regexp_mode(self):
         data = mutex_parser.parse("mutex2 regexp vdd.* vss.*")
-        assert data.is_regexp is True
-        assert data.mutexed_nets == ["vdd.*", "vss.*"]
+        assert data.is_net_regex is True
+        assert data.mutexed_nets == ("vdd.*", "vss.*")
 
     def test_template_mode(self):
         data = mutex_parser.parse("mutex2 template T1 net1 net2")
         assert data.template == "T1"
-        assert data.mutexed_nets == ["net1", "net2"]
+        assert data.mutexed_nets == ("net1", "net2")
 
     def test_active_nets(self):
         data = mutex_parser.parse("mutex2 regular net1 net2 on=net1")
-        assert data.active_nets == ["net1"]
+        assert data.active_nets == ("net1",)
 
     def test_multiple_active_nets(self):
         data = mutex_parser.parse("mutex3 regular net1 net2 net3 on=net1,net2,net3")
-        assert data.active_nets == ["net1", "net2", "net3"]
+        assert data.active_nets == ("net1", "net2", "net3")
 
     def test_many_mutexed(self):
         data = mutex_parser.parse("mutex5 regular a b c d e")

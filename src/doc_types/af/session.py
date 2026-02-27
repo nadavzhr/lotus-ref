@@ -1,14 +1,15 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Optional
 
 from doc_types.af.line_data import AfLineData
 from core.validation_result import ValidationResult
-from core.interfaces import IEditSessionState
-from doc_types.af.validator import validate_af
+from doc_types.af import validator
 
 
 @dataclass(slots=True)
-class AFEditSessionState(IEditSessionState):
+class AfEditSessionState:
     session_id: str
     template_name: Optional[str] = None
     template_regex_mode: bool = False
@@ -33,7 +34,8 @@ class AFEditSessionState(IEditSessionState):
     def validate(self) -> ValidationResult:
         """Domain-only (Layer 2) validation without netlist service.
 
+        Delegates to the shared AF validator so rules are defined once.
         NQS-aware validation (Layer 3) runs via the controller's
         ``validate()`` method, which passes the service explicitly.
         """
-        return validate_af(self.to_line_data())
+        return validator.validate(self.to_line_data())

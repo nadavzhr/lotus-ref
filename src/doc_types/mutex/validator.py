@@ -9,6 +9,8 @@ Used by:
 Layer 2 (domain) is always run. Layer 3 (netlist) is run only when
 an INetlistQueryService is provided.
 """
+from __future__ import annotations
+
 from typing import Optional, TYPE_CHECKING
 
 from doc_types.mutex.line_data import MutexLineData
@@ -18,7 +20,7 @@ if TYPE_CHECKING:
     from core.interfaces import INetlistQueryService
 
 
-def validate_mutex(
+def validate(
     data: MutexLineData,
     nqs: Optional["INetlistQueryService"] = None,
 ) -> ValidationResult:
@@ -64,7 +66,7 @@ def validate_mutex(
     # Resolve all mutexed nets and count total matches
     all_matched_nets: set[str] = set()
     for net in data.mutexed_nets:
-        if data.is_regexp:
+        if data.is_net_regex:
             nets, _ = nqs.find_matches(template, net, False, True)
             if not nets:
                 warnings.append(

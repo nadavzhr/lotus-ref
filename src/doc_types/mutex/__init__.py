@@ -15,7 +15,7 @@ from doc_types.mutex.exceptions import (
 )
 from doc_types.mutex import parser
 from doc_types.mutex import serializer
-from doc_types.mutex.validator import validate_mutex
+from doc_types.mutex import validator
 from doc_types.mutex.session import MutexEditSessionState
 from doc_types.mutex.controller import MutexEditController
 
@@ -36,7 +36,7 @@ __all__ = [
     "InvalidFEVModeError",
     "parser",
     "serializer",
-    "validate_mutex",
+    "validator",
     "MutexEditSessionState",
     "MutexEditController",
 ]

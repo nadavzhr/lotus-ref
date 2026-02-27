@@ -4,6 +4,8 @@ Base error hierarchy for the document editing system.
 All document-type-specific errors should inherit from
 ``DocumentError`` so callers can catch a single base type.
 """
+from __future__ import annotations
+
 
 
 class DocumentError(Exception):

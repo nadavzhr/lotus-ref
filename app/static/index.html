@@ -21,6 +21,7 @@
     --empty-color: #45475a;
     --teal: #94e2d5;
     --peach: #fab387;
+    --purple: #cba6f7;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -99,6 +100,7 @@
   .badge-error { background: var(--red); color: var(--bg); }
   .badge-comment { background: var(--comment-color); color: var(--text); }
   .badge-empty { background: var(--empty-color); color: var(--subtext); }
+  .badge-conflict { background: var(--purple); color: var(--bg); }
 
   /* --- Line table --- */
   .lines-table {
@@ -128,6 +130,7 @@
   .lines-table tr.status-error td:first-child { border-left: 3px solid var(--red); }
   .lines-table tr.status-comment td:first-child { border-left: 3px solid var(--comment-color); }
   .lines-table tr.status-empty td:first-child { border-left: 3px solid var(--empty-color); }
+  .lines-table tr.status-conflict td:first-child { border-left: 3px solid var(--purple); }
   .lines-table tr.status-comment td { color: var(--comment-color); }
   .lines-table tr.status-empty td { color: var(--empty-color); }
 
@@ -146,6 +149,7 @@
   .pill-error { background: rgba(243,139,168,0.15); color: var(--red); }
   .pill-comment { background: rgba(108,112,134,0.15); color: var(--comment-color); }
   .pill-empty { background: rgba(69,71,90,0.15); color: var(--empty-color); }
+  .pill-conflict { background: rgba(203,166,247,0.15); color: var(--purple); }
 
   .line-text {
     white-space: pre-wrap;
@@ -156,7 +160,7 @@
   .line-messages .err { color: var(--red); }
   .line-messages .warn { color: var(--yellow); }
 
-  .edit-col { width: 60px; text-align: center; }
+  .edit-col { width: 120px; text-align: center; white-space: nowrap; }
   .edit-btn {
     background: var(--surface2);
     color: var(--lavender);
@@ -168,6 +172,20 @@
     font-family: inherit;
   }
   .edit-btn:hover { background: var(--overlay); }
+  .action-btn {
+    background: var(--surface2);
+    color: var(--subtext);
+    border: 1px solid var(--overlay);
+    padding: 2px 7px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 11px;
+    font-family: inherit;
+    margin-left: 3px;
+  }
+  .action-btn:hover { background: var(--overlay); }
+  .action-btn.del:hover { background: var(--red); color: var(--bg); }
+  .action-btn.ins:hover { background: var(--teal); color: var(--bg); }
 
   /* --- Edit panel --- */
   .edit-panel {
@@ -352,6 +370,77 @@
     gap: 8px;
     margin-bottom: 12px;
     align-items: center;
+    flex-wrap: wrap;
+  }
+  .toolbar-spacer { flex: 1; }
+
+  /* Undo / Redo */
+  .undo-redo-group {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+  .undo-redo-group button {
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--overlay);
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: opacity 0.15s, background 0.15s;
+  }
+  .undo-redo-group button:hover:not(:disabled) { background: var(--overlay); }
+  .undo-redo-group button:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .action-btn.swap { color: var(--lavender); font-size: 11px; padding: 1px 4px; }
+  .action-btn.swap:hover { background: var(--lavender); color: var(--bg); }
+  .action-btn.cmt { color: var(--subtext); font-size: 11px; padding: 1px 4px; }
+  .action-btn.cmt:hover { background: var(--subtext); color: var(--bg); }
+
+  /* Search / Filter bar */
+  .search-bar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+  }
+  .search-bar input[type="text"] {
+    background: var(--surface2);
+    border: 1px solid var(--overlay);
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 12px;
+    min-width: 220px;
+    flex: 1;
+    max-width: 400px;
+  }
+  .search-bar input[type="text"]::placeholder { color: var(--subtext); }
+  .search-bar select {
+    background: var(--surface2);
+    border: 1px solid var(--overlay);
+    color: var(--text);
+    padding: 6px 8px;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 12px;
+  }
+  .search-bar label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--subtext);
+  }
+  .search-bar .search-count {
+    font-size: 11px;
+    color: var(--subtext);
+    margin-left: 4px;
   }
 </style>
 </head>
@@ -375,9 +464,32 @@
   <div id="doc-view" class="hidden">
     <div id="doc-toolbar">
       <h2 id="doc-title"></h2>
+      <button class="teal-btn" onclick="insertLineAt(0)" title="Insert a new line at the top">+ New Line</button>
+      <div class="toolbar-spacer"></div>
+      <div class="undo-redo-group">
+        <button id="undo-btn" disabled onclick="undoAction()" title="Undo (Ctrl+Z)">↩ Undo</button>
+        <button id="redo-btn" disabled onclick="redoAction()" title="Redo (Ctrl+Y)">↪ Redo</button>
+      </div>
       <button class="save-btn" onclick="saveDoc()">💾 Save</button>
     </div>
     <div id="status-bar" class="status-bar"></div>
+
+    <!-- Search / Filter bar -->
+    <div class="search-bar" id="search-bar">
+      <input type="text" id="search-input" placeholder="Search lines…" oninput="onSearchInput()">
+      <select id="status-filter" onchange="onSearchInput()">
+        <option value="">All statuses</option>
+        <option value="ok">OK</option>
+        <option value="warning">Warning</option>
+        <option value="error">Error</option>
+        <option value="conflict">Conflict</option>
+        <option value="comment">Comment</option>
+      </select>
+      <label>
+        <input type="checkbox" id="search-regex" onchange="onSearchInput()" style="width:14px;height:14px"> Regex
+      </label>
+      <span id="search-count" class="search-count"></span>
+    </div>
 
     <!-- Edit panel -->
     <div id="edit-panel" class="edit-panel">
@@ -397,7 +509,7 @@
           <th>Status</th>
           <th>Raw Text</th>
           <th>Messages</th>
-          <th></th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody id="lines-body"></tbody>
@@ -409,10 +521,13 @@
 const API = '/api';
 let currentDocId = null;
 let currentDocType = null;
-let editingLineId = null;
+let editingPosition = null;
 let editingLineData = null;
 let linesData = [];
 let mutexSession = null;
+let canUndo = false;
+let canRedo = false;
+let searchDebounceTimer = null;
 
 // ---- Helpers ----
 
@@ -461,6 +576,8 @@ async function loadDoc() {
     document.getElementById('doc-title').textContent =
       `${summary.file_path}  (${summary.total_lines} lines)`;
     renderStatusBar(summary.status_counts);
+    updateUndoRedoState(summary.can_undo, summary.can_redo);
+    clearSearch();
     await refreshLines();
     document.getElementById('doc-view').classList.remove('hidden');
     closeEdit();
@@ -475,8 +592,123 @@ function renderStatusBar(counts) {
     counts.ok ? badgeHtml('OK', counts.ok, 'badge-ok') : '',
     counts.warning ? badgeHtml('WARN', counts.warning, 'badge-warning') : '',
     counts.error ? badgeHtml('ERROR', counts.error, 'badge-error') : '',
+    counts.conflict ? badgeHtml('CONFLICT', counts.conflict, 'badge-conflict') : '',
     counts.comment ? badgeHtml('COMMENT', counts.comment, 'badge-comment') : '',
   ].filter(Boolean).join('');
+}
+
+// ---- Undo / Redo ----
+
+function updateUndoRedoState(undo, redo) {
+  canUndo = !!undo;
+  canRedo = !!redo;
+  document.getElementById('undo-btn').disabled = !canUndo;
+  document.getElementById('redo-btn').disabled = !canRedo;
+}
+
+async function undoAction() {
+  if (!currentDocId) return;
+  try {
+    const res = await fetch(`${API}/documents/${currentDocId}/undo`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json();
+      if (res.status !== 400) alert(`Undo failed: ${err.detail || res.statusText}`);
+      return;
+    }
+    const data = await res.json();
+    updateUndoRedoState(data.can_undo, data.can_redo);
+    await refreshLines();
+  } catch (e) {
+    alert('Undo error: ' + e.message);
+  }
+}
+
+async function redoAction() {
+  if (!currentDocId) return;
+  try {
+    const res = await fetch(`${API}/documents/${currentDocId}/redo`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json();
+      if (res.status !== 400) alert(`Redo failed: ${err.detail || res.statusText}`);
+      return;
+    }
+    const data = await res.json();
+    updateUndoRedoState(data.can_undo, data.can_redo);
+    await refreshLines();
+  } catch (e) {
+    alert('Redo error: ' + e.message);
+  }
+}
+
+// Keyboard shortcuts
+document.addEventListener('keydown', (e) => {
+  if (!currentDocId) return;
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+    e.preventDefault();
+    undoAction();
+  } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+    e.preventDefault();
+    redoAction();
+  } else if (e.altKey && e.key === 'ArrowUp' && editingPosition !== null) {
+    e.preventDefault();
+    swapUp(editingPosition);
+  } else if (e.altKey && e.key === 'ArrowDown' && editingPosition !== null) {
+    e.preventDefault();
+    swapDown(editingPosition);
+  } else if ((e.ctrlKey || e.metaKey) && e.key === '/' && editingPosition !== null) {
+    e.preventDefault();
+    toggleComment(editingPosition);
+  }
+});
+
+// ---- Search / Filter ----
+
+function onSearchInput() {
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(executeSearch, 250);
+}
+
+async function executeSearch() {
+  if (!currentDocId) return;
+  const q = document.getElementById('search-input').value;
+  const status = document.getElementById('status-filter').value;
+  const regex = document.getElementById('search-regex').checked;
+
+  // If both blank, just show all lines
+  if (!q && !status) {
+    document.getElementById('search-count').textContent = '';
+    renderLines(linesData);
+    return;
+  }
+
+  try {
+    const params = new URLSearchParams();
+    if (q) params.set('q', q);
+    if (regex) params.set('regex', 'true');
+    if (status) params.set('status', status);
+
+    const res = await fetch(`${API}/documents/${currentDocId}/search?${params}`);
+    if (!res.ok) {
+      const err = await res.json();
+      document.getElementById('search-count').textContent = err.detail || 'Error';
+      document.getElementById('search-count').style.color = 'var(--red)';
+      return;
+    }
+    const matches = await res.json();
+    document.getElementById('search-count').textContent = `${matches.length} of ${linesData.length} lines`;
+    document.getElementById('search-count').style.color = 'var(--subtext)';
+    renderLines(matches);
+  } catch (e) {
+    document.getElementById('search-count').textContent = 'Error: ' + e.message;
+    document.getElementById('search-count').style.color = 'var(--red)';
+  }
+}
+
+function clearSearch() {
+  document.getElementById('search-input').value = '';
+  document.getElementById('status-filter').value = '';
+  document.getElementById('search-regex').checked = false;
+  document.getElementById('search-count').textContent = '';
 }
 
 // ---- Lines Table ----
@@ -484,41 +716,171 @@ function renderStatusBar(counts) {
 async function refreshLines() {
   const res = await fetch(`${API}/documents/${currentDocId}/lines`);
   linesData = await res.json();
-  renderLines(linesData);
+  // Re-apply active search filter if any
+  const q = document.getElementById('search-input').value;
+  const status = document.getElementById('status-filter').value;
+  if (q || status) {
+    executeSearch();
+  } else {
+    renderLines(linesData);
+  }
 }
 
 function renderLines(lines) {
   const tbody = document.getElementById('lines-body');
+
   tbody.innerHTML = lines.map(line => {
     const msgs = [
       ...line.errors.map(e => `<span class="err">✗ ${esc(e)}</span>`),
       ...line.warnings.map(w => `<span class="warn">⚠ ${esc(w)}</span>`),
-    ].join('<br>');
+    ];
 
-    const editBtn = line.has_data
-      ? `<button class="edit-btn" onclick="startEdit('${line.line_id}', ${line.position})">Edit</button>`
+    // Show conflict info if present
+    if (line.conflict_info) {
+      const otherLines = line.conflict_info.conflicting_positions
+        .map(p => '#' + (p + 1))
+        .join(', ');
+      const nets = line.conflict_info.shared_nets.join(', ');
+      msgs.push(`<span style="color:var(--purple)">⚡ Conflicts with line${line.conflict_info.conflicting_positions.length > 1 ? 's' : ''} ${esc(otherLines)} (shared: ${esc(nets)})</span>`);
+    }
+
+    const editBtn = line.status !== 'comment'
+      ? `<button class="edit-btn" onclick="startEdit(${line.position})" title="Edit this line">Edit</button>`
       : '';
+    const cmtBtn = `<button class="action-btn cmt" onclick="toggleComment(${line.position})" title="Toggle comment">#</button>`;
+    const upBtn = `<button class="action-btn swap" onclick="swapUp(${line.position})" title="Move up">▲</button>`;
+    const dnBtn = `<button class="action-btn swap" onclick="swapDown(${line.position})" title="Move down">▼</button>`;
+    const insBtn = `<button class="action-btn ins" onclick="insertLineAt(${line.position + 1})" title="Insert new line below">+</button>`;
+    const delBtn = `<button class="action-btn del" onclick="deleteLine(${line.position})" title="Delete this line">×</button>`;
 
     return `<tr class="status-${line.status}">
       <td class="line-num">${line.position + 1}</td>
       <td class="line-status">${pillHtml(line.status)}</td>
       <td class="line-text">${esc(line.raw_text)}</td>
-      <td class="line-messages">${msgs}</td>
-      <td class="edit-col">${editBtn}</td>
+      <td class="line-messages">${msgs.join('<br>')}</td>
+      <td class="edit-col">${editBtn}${cmtBtn}${upBtn}${dnBtn}${insBtn}${delBtn}</td>
     </tr>`;
   }).join('');
 }
 
+// ---- Delete Line ----
+
+async function deleteLine(position) {
+  const line = linesData[position];
+  try {
+    const res = await fetch(
+      `${API}/documents/${currentDocId}/lines/${position}`,
+      { method: 'DELETE' }
+    );
+    if (!res.ok) {
+      const err = await res.json();
+      return alert(`Delete failed: ${err.detail || res.statusText}`);
+    }
+    // If the deleted line was being edited, close the panel
+    if (editingPosition === position) closeEdit();
+    // Adjust editing position if it was after the deleted line
+    else if (editingPosition !== null && editingPosition > position) editingPosition--;
+    // Delete is a recorded mutation
+    updateUndoRedoState(true, false);
+    await refreshLines();
+    // Update undo/redo state from any subsequent request
+    updateUndoRedoState(true, canRedo);
+    // Update doc title line count
+    const titleEl = document.getElementById('doc-title');
+    titleEl.textContent = titleEl.textContent.replace(
+      /\(\d+ lines\)/, `(${linesData.length} lines)`
+    );
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+// ---- Insert Line ----
+
+async function insertLineAt(position) {
+  try {
+    const res = await fetch(
+      `${API}/documents/${currentDocId}/lines/${position}/insert`,
+      { method: 'POST' }
+    );
+    if (!res.ok) {
+      const err = await res.json();
+      return alert(`Insert failed: ${err.detail || res.statusText}`);
+    }
+    // Adjust editing position if it was at or after the insertion point
+    if (editingPosition !== null && editingPosition >= position) editingPosition++;
+    // Insert is a recorded mutation
+    updateUndoRedoState(true, false);
+    await refreshLines();
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+// ---- Swap Lines ----
+
+async function swapUp(position) {
+  if (position <= 0) return;
+  await doSwap(position, position - 1);
+}
+
+async function swapDown(position) {
+  if (position >= linesData.length - 1) return;
+  await doSwap(position, position + 1);
+}
+
+async function doSwap(posA, posB) {
+  try {
+    const res = await fetch(`${API}/documents/${currentDocId}/swap`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ pos_a: posA, pos_b: posB })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      return alert(`Swap failed: ${err.detail || res.statusText}`);
+    }
+    // Adjust editing position if the edited line was involved
+    if (editingPosition === posA) editingPosition = posB;
+    else if (editingPosition === posB) editingPosition = posA;
+    updateUndoRedoState(true, false);
+    await refreshLines();
+  } catch (e) {
+    alert('Swap error: ' + e.message);
+  }
+}
+
+// ---- Toggle Comment ----
+
+async function toggleComment(position) {
+  try {
+    const res = await fetch(
+      `${API}/documents/${currentDocId}/lines/${position}/toggle-comment`,
+      { method: 'POST' }
+    );
+    if (!res.ok) {
+      const err = await res.json();
+      return alert(`Toggle comment failed: ${err.detail || res.statusText}`);
+    }
+    updateUndoRedoState(true, false);
+    await refreshLines();
+  } catch (e) {
+    alert('Toggle comment error: ' + e.message);
+  }
+}
+
 // ---- Edit Flow ----
 
-async function startEdit(lineId, position) {
+async function startEdit(position) {
   try {
-    const res = await fetch(`${API}/documents/${currentDocId}/lines/${lineId}/edit`, {
-      method: 'POST'
+    const res = await fetch(`${API}/documents/${currentDocId}/lines/${position}/session`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({fields: null})
     });
     if (!res.ok) return alert('Failed to start edit');
     const result = await res.json();
-    editingLineId = lineId;
+    editingPosition = position;
     editingLineData = result.data;
 
     document.getElementById('edit-line-num').textContent = `#${position + 1}`;
@@ -763,7 +1125,7 @@ async function mutexAddNetActive(netName) {
 async function mutexAddMutexed(template, netPattern, isRegex) {
   try {
     const res = await fetch(
-      `${API}/documents/${currentDocId}/lines/${editingLineId}/mutex/add-mutexed`,
+      `${API}/documents/${currentDocId}/lines/${editingPosition}/mutex/add-mutexed`,
       {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -786,7 +1148,7 @@ async function mutexAddMutexed(template, netPattern, isRegex) {
 async function mutexAddActive(template, netName) {
   try {
     const res = await fetch(
-      `${API}/documents/${currentDocId}/lines/${editingLineId}/mutex/add-active`,
+      `${API}/documents/${currentDocId}/lines/${editingPosition}/mutex/add-active`,
       {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -809,7 +1171,7 @@ async function mutexAddActive(template, netName) {
 async function mutexRemoveMutexed(template, netPattern, isRegex) {
   try {
     const res = await fetch(
-      `${API}/documents/${currentDocId}/lines/${editingLineId}/mutex/remove-mutexed`,
+      `${API}/documents/${currentDocId}/lines/${editingPosition}/mutex/remove-mutexed`,
       {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -832,7 +1194,7 @@ async function mutexRemoveMutexed(template, netPattern, isRegex) {
 async function mutexRemoveActive(template, netName) {
   try {
     const res = await fetch(
-      `${API}/documents/${currentDocId}/lines/${editingLineId}/mutex/remove-active`,
+      `${API}/documents/${currentDocId}/lines/${editingPosition}/mutex/remove-active`,
       {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -857,7 +1219,7 @@ async function mutexSetNumActive(value) {
   if (isNaN(val)) return;
   try {
     const res = await fetch(
-      `${API}/documents/${currentDocId}/lines/${editingLineId}/mutex/set-num-active`,
+      `${API}/documents/${currentDocId}/lines/${editingPosition}/mutex/set-num-active`,
       {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -880,7 +1242,7 @@ async function mutexSetFev() {
   const fev = document.getElementById('f-fev').value;
   try {
     const res = await fetch(
-      `${API}/documents/${currentDocId}/lines/${editingLineId}/mutex/set-fev`,
+      `${API}/documents/${currentDocId}/lines/${editingPosition}/mutex/set-fev`,
       {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -906,7 +1268,7 @@ async function mutexSetFev() {
 async function refreshMutexSession() {
   try {
     const res = await fetch(
-      `${API}/documents/${currentDocId}/lines/${editingLineId}/mutex/session`
+      `${API}/documents/${currentDocId}/lines/${editingPosition}/mutex/session`
     );
     if (res.ok) {
       mutexSession = await res.json();
@@ -948,15 +1310,15 @@ function renderMutexSession(session) {
     } else {
       mutexedList.innerHTML = session.mutexed_entries.map(e => {
         const isActive = activeNames.has(e.net_name);
-        const matchInfo = e.matches.length > 0
-          ? `<span class="net-meta">${e.matches.length} match${e.matches.length !== 1 ? 'es' : ''}</span>`
+        const matchInfo = e.match_count > 0
+          ? `<span class="net-meta">${e.match_count} match${e.match_count !== 1 ? 'es' : ''}</span>`
           : '<span class="net-meta" style="color:var(--red)">no matches</span>';
         const regexBadge = e.regex_mode
           ? '<span class="net-meta" style="color:var(--peach)">regex</span>'
           : '';
 
         // Promote-to-active button: only for non-regex, single-match entries not already active
-        const canPromote = !e.regex_mode && e.matches.length === 1 && !isActive;
+        const canPromote = !e.regex_mode && e.match_count === 1 && !isActive;
         const promoteBtn = canPromote
           ? `<button class="small-btn teal-btn" onclick="mutexAddActive(${jsArg(e.template_name)},'${jsStr(e.net_name)}')" title="Promote to Active">→A</button>`
           : '';
@@ -984,7 +1346,7 @@ function renderMutexSession(session) {
         const removeBtn = `<button class="small-btn danger-btn" onclick="mutexRemoveActive(${jsArg(e.template_name)},'${jsStr(e.net_name)}')" title="Remove from Active">×</button>`;
         return `<div class="entry-item entry-item-active">
           <span class="net-name">${esc(e.net_name)}</span>
-          <span class="net-meta">${e.matches.length} match</span>
+          <span class="net-meta">${e.match_count} match</span>
           <span class="entry-actions">${removeBtn}</span>
         </div>`;
       }).join('');
@@ -1015,28 +1377,7 @@ function normalizeTemplateInput(template) {
 // ==================================================================
 
 async function commitMutex() {
-  try {
-    const res = await fetch(
-      `${API}/documents/${currentDocId}/lines/${editingLineId}/mutex/commit`,
-      { method: 'POST' }
-    );
-    const data = await res.json();
-    if (!res.ok) {
-      showResult(`Commit failed: ${data.detail}`, false);
-      return;
-    }
-    const msgs = [...(data.errors || []), ...(data.warnings || [])];
-    if (data.status === 'ok') {
-      showResult('✓ Committed — line is OK', true);
-    } else if (data.status === 'warning') {
-      showResult(`✓ Committed with warnings: ${msgs.join('; ')}`, true);
-    } else {
-      showResult(`X Error: ${msgs.join('; ')}`, false);
-    }
-    await refreshLines();
-  } catch (e) {
-    showResult('Error: ' + e.message, false);
-  }
+  await commitToDocument();
 }
 
 // ==================================================================
@@ -1063,7 +1404,7 @@ function gatherFields() {
       num_active: parseInt(document.getElementById('f-num_active')?.value || '1'),
       fev: document.getElementById('f-fev')?.value || '',
       template: normalizeTemplateInput(document.getElementById('f-template')?.value),
-      is_regexp: document.getElementById('f-is_regexp')?.checked || false,
+      is_net_regex: document.getElementById('f-is_net_regex')?.checked || false,
       mutexed_nets: mnRaw ? mnRaw.split(',').map(s => s.trim()).filter(Boolean) : [],
       active_nets: anRaw ? anRaw.split(',').map(s => s.trim()).filter(Boolean) : [],
     };
@@ -1073,33 +1414,58 @@ function gatherFields() {
 async function submitEdit() {
   const fields = gatherFields();
   try {
-    const res = await fetch(`${API}/documents/${currentDocId}/lines/${editingLineId}`, {
-      method: 'PUT',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ fields })
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      showResult(`Error: ${data.detail || JSON.stringify(data)}`, false);
+    // Step 1: update session with gathered fields
+    const updateRes = await fetch(
+      `${API}/documents/${currentDocId}/lines/${editingPosition}/session`,
+      {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ fields })
+      }
+    );
+    if (!updateRes.ok) {
+      const err = await updateRes.json();
+      showResult(`Error: ${err.detail || JSON.stringify(err)}`, false);
       return;
     }
-    const msgs = [...data.errors, ...data.warnings];
-    if (data.status === 'ok') {
-      showResult('✓ Applied — line is OK', true);
-    } else if (data.status === 'warning') {
-      showResult(`✓ Applied with warnings: ${msgs.join('; ')}`, true);
-    } else {
-      showResult(`Applied but has errors: ${msgs.join('; ')}`, false);
-    }
-    await refreshLines();
+    // Step 2: commit session to document
+    await commitToDocument();
   } catch (e) {
     showResult('Request failed: ' + e.message, false);
   }
 }
 
+/** Commit the current edit session to the document (any doc type). */
+async function commitToDocument() {
+  try {
+    const res = await fetch(
+      `${API}/documents/${currentDocId}/lines/${editingPosition}/commit`,
+      { method: 'POST' }
+    );
+    const data = await res.json();
+    if (!res.ok) {
+      showResult(`Commit failed: ${data.detail || JSON.stringify(data)}`, false);
+      return;
+    }
+    const msgs = [...(data.errors || []), ...(data.warnings || [])];
+    if (data.status === 'ok') {
+      showResult('✓ Committed — line is OK', true);
+    } else if (data.status === 'warning') {
+      showResult(`✓ Committed with warnings: ${msgs.join('; ')}`, true);
+    } else {
+      showResult(`Committed with errors: ${msgs.join('; ')}`, false);
+    }
+    // Commit is a recorded mutation — undo is now available
+    updateUndoRedoState(true, false);
+    await refreshLines();
+  } catch (e) {
+    showResult('Error: ' + e.message, false);
+  }
+}
+
 function closeEdit() {
   document.getElementById('edit-panel').classList.remove('open');
-  editingLineId = null;
+  editingPosition = null;
   editingLineData = null;
   mutexSession = null;
 }
@@ -1128,7 +1494,7 @@ async function saveDoc() {
 // ---- Pre-fill with example paths ----
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('file-path').value =
-    '/home/runner/work/lotus-ref/lotus-ref/data/cfg/mycell.af.dcfg';
+    'C:/Projects/lotus-ref/data/cfg/mycell.af.dcfg';
 });
 </script>
 </body>

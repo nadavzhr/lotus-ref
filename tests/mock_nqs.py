@@ -15,6 +15,12 @@ class MockNetlistQueryService:
         self.canonical_map: dict[tuple[str, Optional[str]], str] = {}
         # Set of known template names
         self.templates: set[str] = set()
+        # Maps (template, net_name) -> set[str] of instance names
+        self.instance_names_map: dict[tuple[str, str], set[str]] = {}
+        # Maps template -> set[str] of nets
+        self.nets_in_template: dict[str, set[str]] = {}
+        # Top cell name
+        self.top_cell: str = ""
 
     def find_matches(
         self,
@@ -28,10 +34,20 @@ class MockNetlistQueryService:
         templates = [template_name] if nets and template_name else []
         return nets, templates
 
+    def find_net_instance_names(self, template: str, net_name: str) -> set[str]:
+        """Return configured instance names, or empty set."""
+        return self.instance_names_map.get((template, net_name), set())
+
     def get_canonical_net_name(
         self, net_name: str, template_name: Optional[str] = None
     ) -> Optional[str]:
         return self.canonical_map.get((net_name, template_name))
+
+    def get_all_nets_in_template(self, template: Optional[str] = None) -> set[str]:
+        return self.nets_in_template.get(template or self.top_cell, set())
+
+    def get_top_cell(self) -> str:
+        return self.top_cell
 
     def get_matching_templates(self, template_pattern: str, is_regex: bool) -> set[str]:
         """Return matching templates. For non-regex, check exact membership."""

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import FrozenSet, Optional
 
@@ -11,9 +13,12 @@ class MutexEntry:
 
     def __post_init__(self):
         """
-        Ensure matches is always stored as a frozenset
-        for immutability and hash safety.
+        Normalise fields for immutability and hash safety.
+        - template_name: coerce '' to None so empty and absent are equivalent.
+        - matches: always stored as a frozenset.
         """
+        if self.template_name is not None and self.template_name.strip() == "":
+            object.__setattr__(self, "template_name", None)
         object.__setattr__(self, "matches", frozenset(self.matches))
 
     def intersects(self, other: "MutexEntry") -> bool:

@@ -206,9 +206,9 @@ class TestMutexControllerSerialization:
         data = ctrl.to_line_data()
         assert isinstance(data, MutexLineData)
         assert data.template == "T1"
-        assert data.is_regexp is False
+        assert data.is_net_regex is False
         assert set(data.mutexed_nets) == {"net1", "net2"}
-        assert data.active_nets == ["net2"]
+        assert data.active_nets == ("net2",)
 
     def test_to_line_data_includes_fev(self, ctrl, nqs):
         ctrl.set_fev_mode(FEVMode.HIGH)
@@ -245,10 +245,10 @@ class TestMutexControllerSerialization:
         data = MutexLineData(
             num_active=2,
             fev=FEVMode.IGNORE,
-            is_regexp=False,
+            is_net_regex=False,
             template="T1",
-            mutexed_nets=["net1", "net2", "net3"],
-            active_nets=[],
+            mutexed_nets=("net1", "net2", "net3"),
+            active_nets=(),
         )
         ctrl = MutexEditController(nqs)
         ctrl.start_session("s1")

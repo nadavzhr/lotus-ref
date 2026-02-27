@@ -1,22 +1,18 @@
+from __future__ import annotations
+
 import re
-import sqlite3
-from threading import RLock
 from functools import lru_cache
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 import logging
+from pathlib import Path
 
-def get_logger(name: str) -> logging.Logger:
-    logger = logging.getLogger(name)
-    if not logger.hasHandlers():
-        # Configure logger with a simple console handler if not already configured
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-    
-    return logger
+from nqs.netlist_database import NetlistDatabase
 
-logger = get_logger(__name__)
+if TYPE_CHECKING:
+    from .netlist_parser.Netlist import Netlist
+    from .netlist_parser.NetlistBuilder import NetlistBuilder
+
+logger = logging.getLogger(__name__)
 
 class NetlistQueryService:
     """
@@ -27,9 +23,8 @@ class NetlistQueryService:
     BUS_PATTERN = re.compile(r'\[(\d+)[:-](\d+)\]')
     INDEX_PATTERN = re.compile(r'\[(\d+)\]')  # Matches individual indices like [0], [1], etc.
     MAX_BUS_EXPANSION = 10000
-    SQLITE_MAX_VARS_PER_QUERY = 900
 
-    def __init__(self, cell: str, spice_file: 'Path', fly_netlist: 'FlyNetlistBuilder'):
+    def __init__(self, cell: str, spice_file: 'Path', netlist: 'NetlistBuilder'):
         """
         Initialize the NetlistQueryService.
 
@@ -38,7 +33,7 @@ class NetlistQueryService:
         Args:
             cell: Name of the cell to load from the spice file
             spice_file: Path to the spice file
-            fly_netlist: Builder for working with netlist data
+            netlist: Builder for working with netlist data
 
         Raises:
             FileNotFoundError: If the spice file cannot be found
@@ -48,12 +43,11 @@ class NetlistQueryService:
 
         # Initialize lifecycle controls early so cleanup/destructor are safe
         # even if initialization fails part-way through.
-        self._db_lock = RLock()
-        self._is_closed = False
+        self._db: Optional[NetlistDatabase] = None
 
         try:
             logger.info(f"Loading spice file for cell '{cell}': {spice_file}")
-            self._fly_netlist = fly_netlist.read_spice_file(cell, str(spice_file))
+            self._netlist = netlist.read_spice_file(cell, str(spice_file))
             logger.info(f"Successfully loaded netlist for cell: {cell}")
         except FileNotFoundError as e:
             logger.critical(f"Spice file not found: {e.filename}")
@@ -62,11 +56,11 @@ class NetlistQueryService:
             logger.critical(f"Error loading netlist: {e}", exc_info=True)
             raise RuntimeError(f"Error loading netlist: {e}") from e
 
-        self._top_cell = self._fly_netlist.get_top_cell().get_name().lower()
+        self._top_cell = self._netlist.get_top_cell().get_name().lower()
         logger.debug(f"Top cell identified: {self._top_cell}")
 
         self._all_templates: set[str] = set(
-                        [t.get_name().lower() for t in self._fly_netlist.get_templates()]
+                        [t.get_name().lower() for t in self._netlist.get_templates()]
         )
         logger.debug(f"Total templates loaded: {len(self._all_templates)}")
 
@@ -76,7 +70,7 @@ class NetlistQueryService:
         
         # Initialize SQLite database for efficient large querying
         logger.debug("Initializing SQLite database for netlist queries")
-        self._init_database()
+        self._db = NetlistDatabase(self._all_nets_in_templates)
         logger.debug("Finished initializing NetlistQueryService")
 
 
@@ -252,7 +246,7 @@ class NetlistQueryService:
         if canonical_name is None:
             return set()
 
-        return set(self._fly_netlist.get_net_instance_names(normalized_template, canonical_name))
+        return set(self._netlist.get_net_instance_names(normalized_template, canonical_name))
 
 ###########################################################################
 ############################ STATIC METHODS ##############################
@@ -335,7 +329,8 @@ class NetlistQueryService:
 
         return _expand(pattern)
 
-    def collapse_bus_notation(self, net_names: list[str]) -> Optional[str]:
+    @staticmethod
+    def collapse_bus_notation(net_names: list[str]) -> Optional[str]:
         """
         Collapse a list of net names with bus notation into a compact representation.
         Examples:
@@ -356,20 +351,20 @@ class NetlistQueryService:
 
         for name in normalized_names:
             # Try to extract indices from both [num:num] and [num] patterns
-            bus_indices = self.BUS_PATTERN.findall(name)  # Returns list of (start, end) tuples
+            bus_indices = NetlistQueryService.BUS_PATTERN.findall(name)  # Returns list of (start, end) tuples
             if bus_indices:
                 # Flatten the bus notation ranges into individual indices
                 indices = [int(idx) for pair in bus_indices for idx in pair]
             else:
                 # Try individual index pattern [num]
-                indices = [int(x) for x in self.INDEX_PATTERN.findall(name)]
+                indices = [int(x) for x in NetlistQueryService.INDEX_PATTERN.findall(name)]
             
             index_lists.append(indices)
 
             # Replace indices with placeholders to get structure
             # First replace bus patterns, then individual indices
-            structure = self.BUS_PATTERN.sub("[]", name)
-            structure = self.INDEX_PATTERN.sub("[]", structure)
+            structure = NetlistQueryService.BUS_PATTERN.sub("[]", name)
+            structure = NetlistQueryService.INDEX_PATTERN.sub("[]", structure)
             
             if template is None:
                 template = structure
@@ -423,21 +418,15 @@ class NetlistQueryService:
     def _get_matching_templates(self, template_name: str, template_regex: bool) -> list[str]:
         """
         Get list of templates that match the given pattern.
+        Uses in-memory set — no SQL needed (template count is always small).
         """
         if not template_regex:
-            results = self._execute_sql_query(
-                'SELECT name FROM templates WHERE name = ? LIMIT 1',
-                (template_name,)
-            )
-            return [results[0][0]] if results else []
+            return [template_name] if template_name in self._all_templates else []
 
         try:
-            results = self._execute_sql_query(
-                'SELECT name FROM templates WHERE name REGEXP ?',
-                (template_name,)
-            )
-            return [row[0] for row in results]
-        except Exception as e:
+            pattern = re.compile(template_name, re.IGNORECASE)
+            return [t for t in self._all_templates if pattern.search(t)]
+        except re.error as e:
             logger.error(f"Error matching template pattern '{template_name}': {e}")
             return []
 
@@ -465,23 +454,18 @@ class NetlistQueryService:
     def _match_nets_regex(self, templates: list[str], net_name: str) -> list[str]:
         """
         Match nets by regex pattern across all given templates in a single SQL query.
+
+        Raises ``re.error`` (wrapped with a user-friendly message) if the
+        pattern is invalid, so the UI can surface a meaningful error.
         """
         if not templates:
             return []
-        placeholders = ','.join('?' * len(templates))
         try:
-            results = self._execute_sql_query(
-                f'''
-                SELECT t.name, n.net_name
-                FROM nets n
-                JOIN templates t ON n.template_id = t.id
-                WHERE t.name IN ({placeholders}) AND n.net_name REGEXP ?
-                ''',
-                (*templates, net_name)
-            )
-        except Exception as e:
-            logger.error(f"Error matching net regex pattern '{net_name}': {e}")
-            return []
+            results = self._db.match_regex(templates, net_name)
+        except re.error as e:
+            raise re.error(
+                f"Invalid regex pattern '{net_name}': {e}"
+            ) from e
         return self._format_net_results(results)
 
     def _match_nets_bus(self, templates: list[str], net_name: str) -> list[str]:
@@ -503,23 +487,7 @@ class NetlistQueryService:
         if not expanded:
             return []
 
-        t_placeholders = ','.join('?' * len(templates))
-        available_for_nets = max(1, self.SQLITE_MAX_VARS_PER_QUERY - len(templates))
-        results = []
-        for start in range(0, len(expanded), available_for_nets):
-            net_chunk = expanded[start:start + available_for_nets]
-            n_placeholders = ','.join('?' * len(net_chunk))
-            chunk_results = self._execute_sql_query(
-                f'''
-                SELECT t.name, n.net_name
-                FROM nets n
-                JOIN templates t ON n.template_id = t.id
-                WHERE t.name IN ({t_placeholders}) AND n.net_name IN ({n_placeholders})
-                ''',
-                (*templates, *net_chunk)
-            )
-            results.extend(chunk_results)
-
+        results = self._db.match_bus(templates, expanded)
         return self._format_net_results(results)
 
     def _match_nets_exact(self, templates: list[str], net_name: str) -> list[str]:
@@ -528,16 +496,7 @@ class NetlistQueryService:
         """
         if not templates:
             return []
-        placeholders = ','.join('?' * len(templates))
-        results = self._execute_sql_query(
-            f'''
-            SELECT t.name, n.net_name
-            FROM nets n
-            JOIN templates t ON n.template_id = t.id
-            WHERE t.name IN ({placeholders}) AND n.net_name = ?
-            ''',
-            (*templates, net_name)
-        )
+        results = self._db.match_exact(templates, net_name)
         return self._format_net_results(results)
 
     def _normalize_template_name(self, template_name: Optional[str]) -> Optional[str]:
@@ -553,7 +512,7 @@ class NetlistQueryService:
             return None
 
         try:
-            _, canonical_name = self._fly_netlist.get_canonical_net_name(
+            _, canonical_name = self._netlist.get_canonical_net_name(
                 net_name=net_name,
                 template_name=template_name,
                 lower=True,
@@ -588,7 +547,7 @@ class NetlistQueryService:
         for template in self._all_templates:
             canonical_nets_in_templates[template] = {
                 canonical_name.lower()
-                for _, canonical_name in self._fly_netlist.get_all_nets(template)
+                for _, canonical_name in self._netlist.get_all_nets(template)
             }
 
         return canonical_nets_in_templates
@@ -607,109 +566,17 @@ class NetlistQueryService:
         ]
 
 ###########################################################################
-############################ SQLITE DATABASE ##############################
+############################ LIFECYCLE ####################################
 ###########################################################################
-
-    def _init_database(self) -> None:
-        """Initialize in-memory SQLite database with netlist data.
-        
-        Creates an in-memory database for efficient net completion queries.
-        The database includes tables with proper indexes for fast searching.
-        The database is cleaned up when this service is closed.
-        
-        Performance optimizations applied:
-        - In-memory database (much faster than file-based for this use case)
-        - Disabled journaling during bulk insert
-        - Batch inserts with executemany
-        - Indexes created AFTER data insertion (faster for bulk loads)
-        """
-        # Use in-memory database for maximum speed (data is rebuilt each session anyway)
-        self._db_path = ':memory:'
-        self._db_conn = sqlite3.connect(self._db_path, check_same_thread=False)
-        self._db_conn.row_factory = sqlite3.Row
-        def _regexp(expr, item):
-            if item is None:
-                return 0
-            try:
-                return 1 if re.search(expr, item, re.IGNORECASE) else 0
-            except re.error:
-                return 0  # Invalid regex patterns do not match anything
-        self._db_conn.create_function("REGEXP", 2, _regexp)
-        cursor = self._db_conn.cursor()
-        
-        # Performance pragmas for bulk insert
-        cursor.execute('PRAGMA synchronous = OFF')
-        cursor.execute('PRAGMA journal_mode = OFF')
-        cursor.execute('PRAGMA cache_size = 100000')  # Larger cache for bulk operations
-        cursor.execute('PRAGMA temp_store = MEMORY')
-        
-        # Create templates table (no indexes yet - add after data)
-        cursor.execute('''
-            CREATE TABLE templates (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE
-            )
-        ''')
-        
-        # Create nets table with foreign key to templates (no indexes yet)
-        cursor.execute('''
-            CREATE TABLE nets (
-                id INTEGER PRIMARY KEY,
-                template_id INTEGER NOT NULL,
-                net_name TEXT NOT NULL,
-                FOREIGN KEY (template_id) REFERENCES templates(id)
-            )
-        ''')
-        
-        # Populate the database - prepare all data first
-        sorted_templates = sorted(self._all_templates)
-        templates_data = [(i, template) for i, template in enumerate(sorted_templates)]
-        template_id_map = {template: i for i, template in enumerate(sorted_templates)}
-        
-        # Batch insert templates
-        cursor.executemany('INSERT INTO templates (id, name) VALUES (?, ?)', templates_data)
-        
-        # Prepare all nets data at once
-        nets_data = []
-        for template, nets in self._all_nets_in_templates.items():
-            template_id = template_id_map[template]
-            nets_data.extend((template_id, net) for net in nets)
-        
-        # Batch insert all nets
-        cursor.executemany('INSERT INTO nets (template_id, net_name) VALUES (?, ?)', nets_data)
-        
-        # Create indexes AFTER data insertion (much faster for bulk loads)
-        cursor.execute('CREATE INDEX idx_template_name ON templates(name)')
-        cursor.execute('CREATE INDEX idx_nets_template ON nets(template_id)')
-        cursor.execute('CREATE INDEX idx_nets_name ON nets(net_name)')
-        cursor.execute('CREATE INDEX idx_nets_template_name ON nets(template_id, net_name)')
-        
-        self._db_conn.commit()
-        
-        # Reset pragmas to safer defaults for runtime queries
-        cursor.execute('PRAGMA synchronous = NORMAL')
-    
-    def _execute_sql_query(self, query: str, params: tuple = ()) -> list:
-        """Execute a SQL query and return all results.
-        
-        Args:
-            query: SQL query string
-            params: Query parameters tuple
-            
-        Returns:
-            List of result rows
-        """
-        if self._is_closed:
-            raise RuntimeError("NetlistQueryService is closed")
-
-        with self._db_lock:
-            cursor = self._db_conn.cursor()
-            cursor.execute(query, params)
-            return cursor.fetchall()
 
     def close(self) -> None:
         """Explicitly close DB resources for this service instance."""
-        self._cleanup_database()
+        if self._db is not None:
+            self._db.close()
+        self.net_exists.cache_clear()
+        self.find_matches.cache_clear()
+        self.find_net_instance_names.cache_clear()
+        self._resolve_canonical_net_name.cache_clear()
 
     def __enter__(self):
         """Allow usage as a context-managed service."""
@@ -718,29 +585,7 @@ class NetlistQueryService:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Close DB resources when leaving context-manager scope."""
         self.close()
-    
-    def _cleanup_database(self) -> None:
-        """Cleanup database connection."""
-        if not hasattr(self, '_db_lock'):
-            return
 
-        with self._db_lock:
-            if getattr(self, '_is_closed', False):
-                return
-
-            try:
-                if hasattr(self, '_db_conn') and self._db_conn:
-                    self._db_conn.close()
-            except Exception:
-                pass  # Ignore cleanup errors
-            finally:
-                self._is_closed = True
-
-            self.net_exists.cache_clear()
-            self.find_matches.cache_clear()
-            self.find_net_instance_names.cache_clear()
-            self._resolve_canonical_net_name.cache_clear()
-    
     def __del__(self):
         """Close database connection on cleanup."""
-        self._cleanup_database()
+        self.close()

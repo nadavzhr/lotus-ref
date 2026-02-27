@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 
 from core.line_status import LineStatus
@@ -15,12 +17,22 @@ class ValidationResult:
     For non-data lines (comments, blanks) ``parse_line`` passes the
     desired status explicitly — since no errors/warnings are set,
     ``__post_init__`` leaves it untouched.
+
+    Passing a non-OK *status* together with *errors* or *warnings*
+    is a programming error and raises ``ValueError``.
     """
     status: LineStatus = LineStatus.OK
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     def __post_init__(self):
+        has_messages = bool(self.errors) or bool(self.warnings)
+        if self.status != LineStatus.OK and has_messages:
+            raise ValueError(
+                f"Cannot pass status={self.status!r} together with "
+                f"errors/warnings. Let __post_init__ derive the status, "
+                f"or pass status only for non-data lines (no errors/warnings)."
+            )
         if self.errors:
             self.status = LineStatus.ERROR
         elif self.warnings:

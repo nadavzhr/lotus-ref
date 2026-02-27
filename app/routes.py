@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from core import DocumentType
-from app.document_service import DocumentService
+from services.document_service import DocumentService
 
 
 router = APIRouter(prefix="/api")
@@ -39,7 +39,7 @@ class LoadRequest(BaseModel):
 
 
 class EditRequest(BaseModel):
-    fields: dict
+    fields: Optional[dict] = None
 
 
 class SaveRequest(BaseModel):
@@ -72,6 +72,11 @@ class MutexNumActiveRequest(BaseModel):
     value: int
 
 
+class SwapRequest(BaseModel):
+    pos_a: int
+    pos_b: int
+
+
 # ------------------------------------------------------------------
 # Endpoints
 # ------------------------------------------------------------------
@@ -97,39 +102,121 @@ def list_documents():
     return svc().list_documents()
 
 
-@router.get("/documents/{doc_id}/lines")
-def get_lines(doc_id: str):
-    """Get all lines in a document."""
+@router.delete("/documents/{doc_id}")
+def close_document(doc_id: str):
+    """Unload a document from memory."""
     try:
-        return svc().get_lines(doc_id)
+        svc().close_document(doc_id)
+        return {"status": "closed", "doc_id": doc_id}
     except KeyError:
         raise HTTPException(404, f"Document not found: {doc_id}")
 
 
-@router.get("/documents/{doc_id}/lines/{line_id}")
-def get_line(doc_id: str, line_id: str):
-    """Get a single line by ID."""
+@router.get("/documents/{doc_id}/lines")
+def get_lines(doc_id: str, offset: int = 0, limit: Optional[int] = None):
+    """Get lines in a document (supports pagination via *offset* / *limit*)."""
     try:
-        return svc().get_line(doc_id, line_id)
+        return svc().get_lines(doc_id, offset=offset, limit=limit)
     except KeyError:
+        raise HTTPException(404, f"Document not found: {doc_id}")
+
+
+@router.get("/documents/{doc_id}/lines/{position}")
+def get_line(doc_id: str, position: int):
+    """Get a single line by 0-based position."""
+    try:
+        return svc().get_line(doc_id, position)
+    except (KeyError, IndexError):
         raise HTTPException(404, "Document or line not found")
 
 
-@router.post("/documents/{doc_id}/lines/{line_id}/edit")
-def start_edit(doc_id: str, line_id: str):
-    """Start editing a line — returns editable fields."""
+@router.get("/documents/{doc_id}/search")
+def search_lines(
+    doc_id: str,
+    q: str = "",
+    regex: bool = False,
+    status: Optional[str] = None,
+):
+    """Search / filter lines by content or status.
+
+    Query params:
+        q:      Substring or regex to match in raw_text.
+        regex:  If true, treat *q* as a regex.
+        status: Filter to a specific status (e.g. "error", "conflict").
+    """
     try:
-        return svc().start_edit(doc_id, line_id)
+        return svc().search_lines(doc_id, q, use_regex=regex, status_filter=status)
     except KeyError:
+        raise HTTPException(404, f"Document not found: {doc_id}")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete("/documents/{doc_id}/lines/{position}")
+def delete_line(doc_id: str, position: int):
+    """Delete a line by its 0-based position."""
+    try:
+        return svc().delete_line(doc_id, position)
+    except (KeyError, IndexError):
         raise HTTPException(404, "Document or line not found")
+    except Exception as e:
+        raise HTTPException(422, str(e))
 
 
-@router.put("/documents/{doc_id}/lines/{line_id}")
-def apply_edit(doc_id: str, line_id: str, req: EditRequest):
-    """Apply edited fields, validate, update the document."""
+@router.post("/documents/{doc_id}/lines/{position}/insert")
+def insert_line(doc_id: str, position: int):
+    """Insert a blank line at the given 0-based position."""
     try:
-        return svc().apply_edit(doc_id, line_id, req.fields)
+        return svc().insert_blank_line(doc_id, position)
+    except (KeyError, IndexError):
+        raise HTTPException(404, "Document or line not found")
+    except Exception as e:
+        raise HTTPException(422, str(e))
+
+
+@router.post("/documents/{doc_id}/lines/{position}/toggle-comment")
+def toggle_comment(doc_id: str, position: int):
+    """Toggle the comment state of a line (comment ↔ uncomment)."""
+    try:
+        return svc().toggle_comment(doc_id, position)
+    except (KeyError, IndexError):
+        raise HTTPException(404, "Document or line not found")
+    except Exception as e:
+        raise HTTPException(422, str(e))
+
+
+@router.post("/documents/{doc_id}/swap")
+def swap_lines(doc_id: str, req: SwapRequest):
+    """Swap two lines by 0-based position."""
+    try:
+        return svc().swap_lines(doc_id, req.pos_a, req.pos_b)
     except KeyError:
+        raise HTTPException(404, f"Document not found: {doc_id}")
+    except (IndexError, ValueError) as e:
+        raise HTTPException(400, str(e))
+
+
+@router.put("/documents/{doc_id}/lines/{position}/session")
+def hydrate_session(doc_id: str, position: int, req: EditRequest):
+    """Start or update an edit session.
+
+    Send ``{ "fields": null }`` (or omit *fields*) to load the line's
+    current data.  Send ``{ "fields": { ... } }`` to apply new values.
+    """
+    try:
+        return svc().hydrate_session(doc_id, position, req.fields)
+    except (KeyError, IndexError):
+        raise HTTPException(404, "Document or line not found")
+    except Exception as e:
+        raise HTTPException(422, str(e))
+
+
+@router.post("/documents/{doc_id}/lines/{position}/commit")
+def commit_edit(doc_id: str, position: int):
+    """Commit the current edit session to the document (any doc type)."""
+    try:
+        return svc().commit_edit(doc_id, position)
+    except (KeyError, IndexError):
         raise HTTPException(404, "Document or line not found")
     except Exception as e:
         raise HTTPException(422, str(e))
@@ -144,6 +231,32 @@ def save_doc(doc_id: str, req: SaveRequest):
         raise HTTPException(404, f"Document not found: {doc_id}")
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+# ------------------------------------------------------------------
+# Undo / Redo
+# ------------------------------------------------------------------
+
+@router.post("/documents/{doc_id}/undo")
+def undo(doc_id: str):
+    """Undo the most recent mutation in *doc_id*."""
+    try:
+        return svc().undo(doc_id)
+    except KeyError:
+        raise HTTPException(404, f"Document not found: {doc_id}")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/documents/{doc_id}/redo")
+def redo(doc_id: str):
+    """Redo the most recently undone mutation in *doc_id*."""
+    try:
+        return svc().redo(doc_id)
+    except KeyError:
+        raise HTTPException(404, f"Document not found: {doc_id}")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 # ------------------------------------------------------------------
@@ -166,83 +279,77 @@ def query_nets(req: QueryNetsRequest):
 # Mutex session operations
 # ------------------------------------------------------------------
 
-@router.get("/documents/{doc_id}/lines/{line_id}/mutex/session")
-def get_mutex_session(doc_id: str, line_id: str):
+@router.get("/documents/{doc_id}/lines/{position}/mutex/session")
+def get_mutex_session(doc_id: str, position: int):
     """Get current mutex edit session state."""
     try:
-        return svc().get_mutex_session(doc_id, line_id)
-    except KeyError:
+        return svc().get_mutex_session(doc_id)
+    except (KeyError, IndexError):
         raise HTTPException(404, "Document or line not found")
     except Exception as e:
         raise HTTPException(422, str(e))
 
 
-@router.post("/documents/{doc_id}/lines/{line_id}/mutex/add-mutexed")
-def mutex_add_mutexed(doc_id: str, line_id: str, req: MutexEntryRequest):
+@router.post("/documents/{doc_id}/lines/{position}/mutex/add-mutexed")
+def mutex_add_mutexed(doc_id: str, position: int, req: MutexEntryRequest):
     """Add a net pattern to the mutexed set via the controller."""
     try:
         return svc().mutex_add_mutexed(
-            doc_id, line_id, req.template, req.net_pattern, req.is_regex,
+            doc_id, req.template, req.net_pattern, req.is_regex,
         )
     except Exception as e:
         raise HTTPException(422, str(e))
 
 
-@router.post("/documents/{doc_id}/lines/{line_id}/mutex/add-active")
-def mutex_add_active(doc_id: str, line_id: str, req: MutexActiveRequest):
+@router.post("/documents/{doc_id}/lines/{position}/mutex/add-active")
+def mutex_add_active(doc_id: str, position: int, req: MutexActiveRequest):
     """Add a net directly to the active (and mutexed) set."""
     try:
         return svc().mutex_add_active(
-            doc_id, line_id, req.template, req.net_name,
+            doc_id, req.template, req.net_name,
         )
     except Exception as e:
         raise HTTPException(422, str(e))
 
 
-@router.post("/documents/{doc_id}/lines/{line_id}/mutex/remove-mutexed")
-def mutex_remove_mutexed(doc_id: str, line_id: str, req: MutexEntryRequest):
+@router.post("/documents/{doc_id}/lines/{position}/mutex/remove-mutexed")
+def mutex_remove_mutexed(doc_id: str, position: int, req: MutexEntryRequest):
     """Remove a net pattern from the mutexed set."""
     try:
         return svc().mutex_remove_mutexed(
-            doc_id, line_id, req.template, req.net_pattern, req.is_regex,
+            doc_id, req.template, req.net_pattern, req.is_regex,
         )
     except Exception as e:
         raise HTTPException(422, str(e))
 
 
-@router.post("/documents/{doc_id}/lines/{line_id}/mutex/remove-active")
-def mutex_remove_active(doc_id: str, line_id: str, req: MutexActiveRequest):
+@router.post("/documents/{doc_id}/lines/{position}/mutex/remove-active")
+def mutex_remove_active(doc_id: str, position: int, req: MutexActiveRequest):
     """Remove a net from the active set."""
     try:
         return svc().mutex_remove_active(
-            doc_id, line_id, req.template, req.net_name,
+            doc_id, req.template, req.net_name,
         )
     except Exception as e:
         raise HTTPException(422, str(e))
 
 
-@router.post("/documents/{doc_id}/lines/{line_id}/mutex/set-fev")
-def mutex_set_fev(doc_id: str, line_id: str, req: MutexFevRequest):
+@router.post("/documents/{doc_id}/lines/{position}/mutex/set-fev")
+def mutex_set_fev(doc_id: str, position: int, req: MutexFevRequest):
     """Set FEV mode on the mutex session."""
     try:
-        return svc().mutex_set_fev(doc_id, line_id, req.fev)
+        return svc().mutex_set_fev(doc_id, req.fev)
     except Exception as e:
         raise HTTPException(422, str(e))
 
 
-@router.post("/documents/{doc_id}/lines/{line_id}/mutex/set-num-active")
-def mutex_set_num_active(doc_id: str, line_id: str, req: MutexNumActiveRequest):
+@router.post("/documents/{doc_id}/lines/{position}/mutex/set-num-active")
+def mutex_set_num_active(doc_id: str, position: int, req: MutexNumActiveRequest):
     """Set num_active on the mutex session (only when active list is empty)."""
     try:
-        return svc().mutex_set_num_active(doc_id, line_id, req.value)
+        return svc().mutex_set_num_active(doc_id, req.value)
     except Exception as e:
         raise HTTPException(422, str(e))
 
 
-@router.post("/documents/{doc_id}/lines/{line_id}/mutex/commit")
-def commit_mutex_edit(doc_id: str, line_id: str):
-    """Commit the current mutex session state to the document."""
-    try:
-        return svc().commit_mutex_edit(doc_id, line_id)
-    except Exception as e:
-        raise HTTPException(422, str(e))
+# commit_mutex_edit removed — use the unified POST /lines/{position}/commit instead

@@ -1,16 +1,21 @@
+from __future__ import annotations
+
+import logging
 from typing import Optional
 
 from doc_types.mutex.exceptions import EntryNotFoundError
+
+logger = logging.getLogger(__name__)
 from doc_types.mutex.line_data import MutexLineData, FEVMode
 from doc_types.mutex.entry import MutexEntry
 from core.validation_result import ValidationResult
 
 from doc_types.mutex.session import MutexEditSessionState
-from core.interfaces import IEditController, INetlistQueryService
-from doc_types.mutex.validator import validate_mutex
+from core.interfaces import INetlistQueryService
+from doc_types.mutex.validator import validate
 
 
-class MutexEditController(IEditController[MutexLineData]):
+class MutexEditController:
 
     def __init__(self, netlist_query_service: INetlistQueryService):
         self._nqs = netlist_query_service
@@ -21,6 +26,7 @@ class MutexEditController(IEditController[MutexLineData]):
     # ---------------------------
 
     def start_session(self, session_id: str) -> None:
+        logger.debug("Mutex session started: %s", session_id)
         self._session = MutexEditSessionState(session_id)
 
     # ---------------------------
@@ -101,7 +107,7 @@ class MutexEditController(IEditController[MutexLineData]):
 
         1. Session structural checks (enough nets, num_active bounds).
            If errors exist, return immediately — no point running NQS checks.
-        2. NQS-aware checks via ``validate_mutex`` (bus expansion mismatches,
+        2. NQS-aware checks via ``validate`` (bus expansion mismatches,
            missing nets, non-canonical names, template existence, …).
 
         Callers only see a single ValidationResult.  Errors mean "do not
@@ -109,9 +115,13 @@ class MutexEditController(IEditController[MutexLineData]):
         """
         session_result = self._session.validate()
         if not session_result:
+            logger.debug("Mutex session validation failed: %s", session_result.errors)
             return session_result
 
-        return validate_mutex(self.to_line_data(), nqs=self._nqs)
+        result = validate(self.to_line_data(), nqs=self._nqs)
+        if result.warnings:
+            logger.debug("Mutex validation warnings: %s", result.warnings)
+        return result
 
     def to_line_data(self) -> MutexLineData:
         """
@@ -120,10 +130,10 @@ class MutexEditController(IEditController[MutexLineData]):
         return MutexLineData(
             num_active=self._session.num_active,
             fev=self._session.fev,
-            is_regexp=self._session.regex_mode,
+            is_net_regex=self._session.regex_mode,
             template=self._session.template,
-            mutexed_nets=[e.net_name for e in self._session.mutexed_entries],
-            active_nets=[e.net_name for e in self._session.active_entries],
+            mutexed_nets=tuple(e.net_name for e in self._session.mutexed_entries),
+            active_nets=tuple(e.net_name for e in self._session.active_entries),
         )
 
     def from_line_data(self, data: MutexLineData) -> None:
@@ -144,7 +154,7 @@ class MutexEditController(IEditController[MutexLineData]):
                 if net_name in data.active_nets:
                     self.add_active(template, net_name)
                 else:
-                    self.add_mutexed(template, net_name, data.is_regexp)
+                    self.add_mutexed(template, net_name, data.is_net_regex)
 
         # num_active is derived when active entries exist;
         # only set the explicit count when there are none.

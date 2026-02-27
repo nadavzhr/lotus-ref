@@ -3,6 +3,8 @@ Parser for Mutex configuration lines.
 
 Line format: mutex<N>[_suffix] <type> <nets> [on=<active>]
 """
+from __future__ import annotations
+
 import re
 
 from doc_types.mutex.line_data import MutexLineData, FEVMode
@@ -51,11 +53,12 @@ def parse(text: str) -> MutexLineData:
     )
 
     fev_str = match.group("fev_suffix") or ""
+    is_regexp_group = match.group("is_regexp")
     return MutexLineData(
         num_active=int(match.group("mutex_num")),
         fev=FEVMode(fev_str),
-        is_regexp=match.group("is_regexp") == "regexp",
+        is_net_regex=is_regexp_group is not None and is_regexp_group == "regexp",
         template=match.group("template_name") or None,
-        mutexed_nets=[n.strip() for n in match.group("mutexed_nets").split()],
-        active_nets=active_nets,
+        mutexed_nets=tuple(n.strip() for n in match.group("mutexed_nets").split()),
+        active_nets=tuple(active_nets),
     )

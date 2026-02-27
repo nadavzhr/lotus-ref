@@ -1,30 +1,38 @@
 """
 FastAPI application entry point.
 
-Run:  cd bg-refactor && python -m uvicorn app.main:app --reload --port 8000
+Run:  cd lotus-ref && python -m uvicorn app.main:app --reload --port 8000
 """
 from __future__ import annotations
 
-import sys
-import os
+import logging
+from pathlib import Path
 
-# Ensure bg-refactor/src is on sys.path so absolute imports work
-_project_root = os.path.dirname(os.path.dirname(__file__))
-sys.path.insert(0, os.path.join(_project_root, "src"))
-sys.path.insert(0, _project_root)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(name)s  %(levelname)s  %(message)s",
+)
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from app.document_service import DocumentService
+from services.document_service import DocumentService
 from app.routes import router, init_service
+from nqs.netlist_query_service import NetlistQueryService
+from nqs.netlist_parser.NetlistBuilder import NetlistBuilder
+
+_project_root = Path(__file__).resolve().parent.parent
 
 app = FastAPI(title="DCFG Editor Prototype")
 
-from nqs.spice_nqs import SpiceNetlistQueryService  # noqa — src/nqs/
-_spice_file = os.path.join(_project_root, "data", "spice", "mycell.sp")
-nqs = SpiceNetlistQueryService(cell="mycell", spice_file=_spice_file)
+cell = "mycell"
+_spice_file = _project_root / "data" / "spice" / f"{cell}.sp"
+nqs = NetlistQueryService(cell=cell, spice_file=_spice_file, netlist=NetlistBuilder(logger=logging.getLogger(__name__)))
+
+# cell = "ip78d6hcf2sr4096x135m4i2k4w8r2lya"
+# _spice_file2 = _project_root / "tmp" / cell / "spice" / f"{cell}.sp"
+# nqs = NetlistQueryService(cell=cell, spice_file=_spice_file2, netlist=NetlistBuilder(logger=logging.getLogger(__name__)))
 
 init_service(DocumentService(nqs=nqs))
 
@@ -32,12 +40,12 @@ init_service(DocumentService(nqs=nqs))
 app.include_router(router)
 
 # Serve static frontend
-_static_dir = os.path.join(os.path.dirname(__file__), "static")
-if os.path.isdir(_static_dir):
-    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+_static_dir = Path(__file__).resolve().parent / "static"
+if _static_dir.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 
 @app.get("/")
 def index():
     """Serve the frontend."""
-    return FileResponse(os.path.join(_static_dir, "index.html"))
+    return FileResponse(str(_static_dir / "index.html"))

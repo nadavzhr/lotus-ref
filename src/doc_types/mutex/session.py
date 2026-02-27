@@ -1,12 +1,23 @@
-from doc_types.mutex.exceptions import *
+from __future__ import annotations
+
+from doc_types.mutex.exceptions import (
+    DuplicateEntryError,
+    TemplateMismatchError,
+    RegexModeMismatchError,
+    IntersectionError,
+    ActiveRegexError,
+    ActiveMultipleMatchesError,
+    NoMatchesError,
+    EntryNotFoundError,
+    InvalidFEVModeError,
+)
 from doc_types.mutex.entry import MutexEntry
 from core.validation_result import ValidationResult
-from core.interfaces import IEditSessionState
 from doc_types.mutex.line_data import FEVMode
 
 from contextlib import contextmanager
 
-class MutexEditSessionState(IEditSessionState):
+class MutexEditSessionState:
 
     def __init__(self, session_id: str):
         self.session_id = session_id
@@ -98,8 +109,8 @@ class MutexEditSessionState(IEditSessionState):
 
         if self.template is not None and entry.template_name != self.template:
             raise TemplateMismatchError(
-                f"Entry {entry} has template {entry.template_name} "
-                f"which does not match session template {self.template}."
+                f"Entry {entry} has template {entry.template_name!r} "
+                f"which does not match session template {self.template!r}."
             )
 
         if not self._loading and not entry.matches:

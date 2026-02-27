@@ -1,6 +1,8 @@
 import pytest
 
-from core.conflict_store import ConflictStore, ConflictInfo, resolve_line_nets
+from core.conflict_store import ConflictStore, ConflictInfo, ConflictDetector
+from core.document_line import DocumentLine
+from core.validation_result import ValidationResult
 from doc_types.af.line_data import AfLineData
 from doc_types.mutex.line_data import MutexLineData, FEVMode
 from tests.mock_nqs import MockNetlistQueryService
@@ -79,7 +81,7 @@ class TestConflictStoreDetection:
         assert info.shared_net_ids == frozenset({100})
 
 
-class TestConflictStoreIncremental:
+class TestConflictStoreUpdates:
 
     def test_update_resolves_conflict(self):
         store = ConflictStore()
@@ -136,59 +138,150 @@ class TestConflictStoreIncremental:
 
 
 # ===========================================================
-# resolve_line_nets
+# ConflictDetector
 # ===========================================================
 
-class TestResolveLineNets:
+def _make_line(line_id: str, data=None) -> DocumentLine:
+    """Helper to create a DocumentLine with optional data."""
+    return DocumentLine(
+        line_id=line_id,
+        raw_text="",
+        data=data,
+        validation_result=ValidationResult(),
+    )
 
-    def test_af_line_resolves_to_canonical_ids(self):
-        nqs = MockNetlistQueryService()
-        nqs.canonical_id_map[(None, "vdd", False)] = frozenset({10})
 
-        data = AfLineData(net="vdd", af_value=0.5, is_em_enabled=True)
-        ids = resolve_line_nets(data, nqs)
+def _make_mock_nqs_for_detector():
+    """Create a mock NQS with enough data to support ConflictDetector."""
+    nqs = MockNetlistQueryService()
+    nqs.top_cell = "top"
+    nqs.templates = {"top"}
+    nqs.nets_in_template = {"top": {"vdd", "vss", "clk"}}
+    # find_matches returns qualified net names; find_net_instance_names
+    # maps template-scoped nets to top-cell names.
+    nqs.net_matches = {
+        (None, "vdd", False): ["vdd"],
+        ("top", "vdd", False): ["vdd"],
+        (None, "vss", False): ["vss"],
+        ("top", "vss", False): ["vss"],
+        (None, "clk", False): ["clk"],
+        ("top", "clk", False): ["clk"],
+    }
+    nqs.instance_names_map = {
+        ("top", "vdd"): {"vdd"},
+        ("top", "vss"): {"vss"},
+        ("top", "clk"): {"clk"},
+    }
+    return nqs
 
-        assert ids == frozenset({10})
 
-    def test_af_line_with_template(self):
-        nqs = MockNetlistQueryService()
-        nqs.canonical_id_map[("t1", "vdd", False)] = frozenset({10, 20})
+class TestConflictDetectorResolve:
 
-        data = AfLineData(template="t1", net="vdd", af_value=0.5, is_em_enabled=True)
-        ids = resolve_line_nets(data, nqs)
+    def test_resolve_to_canonical_ids(self):
+        nqs = _make_mock_nqs_for_detector()
+        det = ConflictDetector(nqs)
 
-        assert ids == frozenset({10, 20})
+        ids = det.resolve_to_canonical_ids(None, "vdd", False, False)
+        assert len(ids) == 1
+        nid = next(iter(ids))
+        assert det.canonical_net_name(nid) == "vdd"
 
-    def test_af_line_no_matches(self):
-        nqs = MockNetlistQueryService()
+    def test_empty_net_returns_empty(self):
+        nqs = _make_mock_nqs_for_detector()
+        det = ConflictDetector(nqs)
+        assert det.resolve_to_canonical_ids(None, "", False, False) == frozenset()
 
-        data = AfLineData(net="nonexistent", af_value=0.5, is_em_enabled=True)
-        ids = resolve_line_nets(data, nqs)
+    def test_nonexistent_net_returns_empty(self):
+        nqs = _make_mock_nqs_for_detector()
+        det = ConflictDetector(nqs)
+        assert det.resolve_to_canonical_ids(None, "nonexistent", False, False) == frozenset()
 
-        assert ids == frozenset()
 
-    def test_mutex_line_resolves_to_canonical_ids(self):
-        nqs = MockNetlistQueryService()
-        nqs.canonical_id_map[(None, "vdd", False)] = frozenset({10})
-        nqs.canonical_id_map[(None, "vss", False)] = frozenset({20})
+class TestConflictDetectorRebuild:
 
-        data = MutexLineData(
-            num_active=1,
-            mutexed_nets=["vdd", "vss"],
-        )
-        ids = resolve_line_nets(data, nqs)
+    def test_rebuild_detects_conflict(self):
+        nqs = _make_mock_nqs_for_detector()
+        det = ConflictDetector(nqs)
 
-        assert ids == frozenset({10, 20})
+        lines = [
+            _make_line("L1", AfLineData(net="vdd", af_value=0.5, is_em_enabled=True)),
+            _make_line("L2", AfLineData(net="vdd", af_value=0.8, is_em_enabled=True)),
+        ]
+        det.rebuild(lines)
 
-    def test_mutex_regex_line(self):
-        nqs = MockNetlistQueryService()
-        nqs.canonical_id_map[(None, "vdd.*", True)] = frozenset({10, 20})
+        assert det.is_conflicting("L1")
+        assert det.is_conflicting("L2")
+        assert det.get_conflicting_lines("L1") == {"L2"}
 
-        data = MutexLineData(
-            num_active=1,
-            is_regexp=True,
-            mutexed_nets=["vdd.*"],
-        )
-        ids = resolve_line_nets(data, nqs)
+    def test_rebuild_no_conflict(self):
+        nqs = _make_mock_nqs_for_detector()
+        det = ConflictDetector(nqs)
 
-        assert ids == frozenset({10, 20})
+        lines = [
+            _make_line("L1", AfLineData(net="vdd", af_value=0.5, is_em_enabled=True)),
+            _make_line("L2", AfLineData(net="vss", af_value=0.5, is_em_enabled=True)),
+        ]
+        det.rebuild(lines)
+
+        assert not det.is_conflicting("L1")
+        assert not det.is_conflicting("L2")
+
+    def test_rebuild_replaces_old_state(self):
+        nqs = _make_mock_nqs_for_detector()
+        det = ConflictDetector(nqs)
+
+        # First: conflict
+        lines = [
+            _make_line("L1", AfLineData(net="vdd", af_value=0.5, is_em_enabled=True)),
+            _make_line("L2", AfLineData(net="vdd", af_value=0.8, is_em_enabled=True)),
+        ]
+        det.rebuild(lines)
+        assert det.is_conflicting("L1")
+
+        # Second: no conflict
+        lines = [
+            _make_line("L1", AfLineData(net="vdd", af_value=0.5, is_em_enabled=True)),
+            _make_line("L2", AfLineData(net="vss", af_value=0.5, is_em_enabled=True)),
+        ]
+        det.rebuild(lines)
+        assert not det.is_conflicting("L1")
+        assert not det.is_conflicting("L2")
+
+    def test_rebuild_skips_comment_lines(self):
+        nqs = _make_mock_nqs_for_detector()
+        det = ConflictDetector(nqs)
+
+        lines = [
+            _make_line("L1", AfLineData(net="vdd", af_value=0.5, is_em_enabled=True)),
+            _make_line("L2", None),  # comment or blank
+        ]
+        det.rebuild(lines)
+        assert not det.is_conflicting("L1")
+
+    def test_conflict_info(self):
+        nqs = _make_mock_nqs_for_detector()
+        det = ConflictDetector(nqs)
+
+        lines = [
+            _make_line("L1", AfLineData(net="vdd", af_value=0.5, is_em_enabled=True)),
+            _make_line("L2", AfLineData(net="vdd", af_value=0.8, is_em_enabled=True)),
+        ]
+        det.rebuild(lines)
+
+        info = det.get_conflict_info("L1")
+        assert info is not None
+        assert info.conflicting_line_ids == {"L2"}
+        assert len(info.shared_net_ids) == 1
+
+    def test_mutex_line_resolves(self):
+        nqs = _make_mock_nqs_for_detector()
+        det = ConflictDetector(nqs)
+
+        lines = [
+            _make_line("L1", AfLineData(net="vdd", af_value=0.5, is_em_enabled=True)),
+            _make_line("L2", MutexLineData(num_active=1, mutexed_nets=["vdd", "vss"])),
+        ]
+        det.rebuild(lines)
+        # L1 covers vdd, L2 covers vdd+vss → overlap on vdd
+        assert det.is_conflicting("L1")
+        assert det.is_conflicting("L2")

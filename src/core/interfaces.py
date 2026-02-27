@@ -34,24 +34,18 @@ class INetlistQueryService(Protocol):
         net_name: str,
     ) -> set[str]: ...
 
-    def resolve_to_canonical_ids(
-        self,
-        template: Optional[str],
-        net_name: str,
-        template_regex: bool,
-        net_regex: bool,
-    ) -> frozenset[int]: ...
-
-    def canonical_net_name(
-        self,
-        net_id: int,
-    ) -> Optional[str]: ...
-
     def get_canonical_net_name(
         self,
         net_name: str,
         template_name: Optional[str] = None
     ) -> Optional[str]: ...
+
+    def get_all_nets_in_template(
+        self,
+        template: Optional[str] = None,
+    ) -> set[str]: ...
+
+    def get_top_cell(self) -> str: ...
 
     def get_matching_templates(
         self,

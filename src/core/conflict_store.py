@@ -8,32 +8,31 @@ close-to-O(1) lookups:
 - ``_line_nets[line_id]``  → frozenset of canonical net IDs
 - ``_net_lines[net_id]``   → set of line_ids that cover that net
 
-Canonical net IDs are integers assigned by the NQS at startup.
-String names are stored once in the NQS and resolved only for UI
-display, keeping the core indexes compact and cache-friendly.
+Canonical net IDs are integers assigned by the ConflictDetector at startup.
+String names are stored once and resolved only for UI display, keeping the
+core indexes compact and cache-friendly.
 
-All mutations are incremental: updating or removing a single line
-touches only the nets that line previously/newly covers, so no full
-rebuild is needed for single-line edits.
+ConflictDetector owns both the ID mapping and the ConflictStore.  It
+is fully rebuilt from all document lines on every edit to guarantee
+consistency — a single line change can affect arbitrarily many other
+lines, so incremental updates are not attempted.
 
 Usage::
 
-    store = ConflictStore()
-    store.update_line("line-1", frozenset({100, 200}))
-    store.update_line("line-2", frozenset({100, 300}))
+    detector = ConflictDetector(nqs)
+    detector.rebuild(doc.lines)
 
-    store.is_conflicting("line-1")              # True
-    store.get_conflicting_lines("line-1")       # {"line-2"}
-    store.get_conflicting_net_ids("line-1")     # {100}
+    detector.is_conflicting("line-1")
+    detector.get_conflict_info("line-1")
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from functools import lru_cache
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from doc_types.af.line_data import AfLineData
-    from doc_types.mutex.line_data import MutexLineData
+    from core.document_line import DocumentLine
     from core.interfaces import INetlistQueryService
 
 
@@ -60,8 +59,7 @@ class ConflictStore:
         Set (or replace) the canonical net IDs for *line_id*.
 
         If the line already existed, its old nets are first removed from
-        the reverse index, then the new nets are inserted.  This is the
-        main incremental-update entry point.
+        the reverse index, then the new nets are inserted.
         """
         self._remove_line_from_index(line_id)
 
@@ -161,37 +159,161 @@ class ConflictInfo:
 
 
 # ------------------------------------------------------------------
-# Net resolution helpers
+# ConflictDetector — separate from the query service
 # ------------------------------------------------------------------
 
-def resolve_line_nets(
-    data: "AfLineData | MutexLineData",
-    nqs: "INetlistQueryService",
-) -> frozenset[int]:
+class ConflictDetector:
     """
-    Resolve the set of top-cell canonical net IDs that *data* covers,
-    using ``resolve_to_canonical_ids`` on *nqs*.
+    Owns all conflict-detection logic and a :class:`ConflictStore`.
 
-    Returns a frozenset of integer canonical net IDs.
+    It holds a reference to an :class:`INetlistQueryService` but never
+    mutates it.  The service remains completely unaware of conflicts;
+    it only answers queries.  The detector translates those query
+    results into integer canonical-net-ID sets and maintains the
+    bidirectional index via :class:`ConflictStore`.
+
+    Conflict state is always rebuilt from scratch (via :meth:`rebuild`)
+    because a single line change can cascade into conflicts with
+    arbitrarily many other lines.
     """
-    from doc_types.af.line_data import AfLineData
-    from doc_types.mutex.line_data import MutexLineData
 
-    if isinstance(data, AfLineData):
-        return nqs.resolve_to_canonical_ids(
-            data.template, data.net,
-            data.is_template_regex, data.is_net_regex,
+    def __init__(self, nqs: "INetlistQueryService") -> None:
+        self._nqs = nqs
+        self._store = ConflictStore()
+        self._build_id_table()
+
+    # ------------------------------------------------------------------
+    # ID table — maps top-cell canonical net names ↔ integers
+    # ------------------------------------------------------------------
+
+    def _build_id_table(self) -> None:
+        top_cell = self._nqs.get_top_cell()
+        top_nets = sorted(self._nqs.get_all_nets_in_template(top_cell))
+        self._net_id_map: dict[str, int] = {
+            name: i for i, name in enumerate(top_nets)
+        }
+        self._id_net_map: dict[int, str] = dict(enumerate(top_nets))
+
+    def canonical_net_name(self, net_id: int) -> Optional[str]:
+        """Return the human-readable net name for an integer ID."""
+        return self._id_net_map.get(net_id)
+
+    # ------------------------------------------------------------------
+    # Resolution — pattern → frozenset[int]
+    # ------------------------------------------------------------------
+
+    @lru_cache(maxsize=256)
+    def resolve_to_canonical_ids(
+        self,
+        template: Optional[str],
+        net_name: str,
+        template_regex: bool,
+        net_regex: bool,
+    ) -> frozenset[int]:
+        """
+        Resolve a template/net pattern to top-cell canonical net IDs.
+
+        Uses the query service to find matching nets and map them
+        through the hierarchy.  Returns a frozenset of integer IDs.
+        """
+        if not net_name:
+            return frozenset()
+
+        nqs = self._nqs
+        top_cell = nqs.get_top_cell()
+        tpl_name = (template or top_cell)
+        tpl_name = tpl_name.lower() if not template_regex else tpl_name
+        net_norm = net_name.lower() if not net_regex else net_name
+
+        # Use find_matches to get the resolved canonical net names
+        matching_nets, matching_templates = nqs.find_matches(
+            tpl_name, net_norm, template_regex, net_regex,
         )
+        if not matching_nets:
+            return frozenset()
 
-    if isinstance(data, MutexLineData):
-        all_ids: set[int] = set()
-        for net in data.mutexed_nets:
-            all_ids.update(
-                nqs.resolve_to_canonical_ids(
-                    data.template, net,
-                    False, data.is_regexp,
-                )
+        result_ids: set[int] = set()
+        for qualified_net in matching_nets:
+            # qualified_net is either "net" (top-cell) or "template:net"
+            if ":" in qualified_net:
+                tpl, net = qualified_net.split(":", 1)
+            else:
+                tpl = top_cell
+                net = qualified_net
+
+            # Map through hierarchy: template-scoped net → top-cell names
+            instance_names = nqs.find_net_instance_names(tpl, net)
+            for name in instance_names:
+                nid = self._net_id_map.get(name)
+                if nid is not None:
+                    result_ids.add(nid)
+
+        return frozenset(result_ids)
+
+    # ------------------------------------------------------------------
+    # Line resolution helpers
+    # ------------------------------------------------------------------
+
+    def resolve_line_nets(self, data) -> frozenset[int]:
+        """
+        Resolve the set of top-cell canonical net IDs that a line's
+        data covers.
+
+        *data* may be an :class:`AfLineData` or :class:`MutexLineData`.
+        Returns a frozenset of integer canonical net IDs.
+        """
+        from doc_types.af.line_data import AfLineData
+        from doc_types.mutex.line_data import MutexLineData
+
+        if isinstance(data, AfLineData):
+            return self.resolve_to_canonical_ids(
+                data.template, data.net,
+                data.is_template_regex, data.is_net_regex,
             )
-        return frozenset(all_ids)
 
-    return frozenset()
+        if isinstance(data, MutexLineData):
+            all_ids: set[int] = set()
+            for net in data.mutexed_nets:
+                all_ids.update(
+                    self.resolve_to_canonical_ids(
+                        data.template, net,
+                        False, data.is_regexp,
+                    )
+                )
+            return frozenset(all_ids)
+
+        return frozenset()
+
+    # ------------------------------------------------------------------
+    # Full rebuild
+    # ------------------------------------------------------------------
+
+    def rebuild(self, lines: list["DocumentLine"]) -> None:
+        """
+        Rebuild conflict state from scratch for all *lines*.
+
+        This is the **only** mutation path — no incremental updates.
+        A single line change can create or resolve conflicts with
+        arbitrarily many other lines, so we always rebuild entirely.
+        """
+        self._store.clear()
+        for line in lines:
+            if line.data is not None:
+                nets = self.resolve_line_nets(line.data)
+                self._store.update_line(line.line_id, nets)
+
+    # ------------------------------------------------------------------
+    # Query delegation to store
+    # ------------------------------------------------------------------
+
+    def is_conflicting(self, line_id: str) -> bool:
+        return self._store.is_conflicting(line_id)
+
+    def get_conflicting_lines(self, line_id: str) -> set[str]:
+        return self._store.get_conflicting_lines(line_id)
+
+    def get_conflicting_net_ids(self, line_id: str) -> frozenset[int]:
+        return self._store.get_conflicting_net_ids(line_id)
+
+    def get_conflict_info(self, line_id: str) -> Optional[ConflictInfo]:
+        return self._store.get_conflict_info(line_id)

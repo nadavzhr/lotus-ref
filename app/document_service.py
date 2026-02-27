@@ -12,7 +12,7 @@ import dataclasses
 from typing import Any, Optional
 
 from core import DocumentType, Document, DocumentLine, LineData, LineStatus, IEditController, INetlistQueryService
-from core.conflict_store import ConflictStore, resolve_line_nets
+from core.conflict_store import ConflictDetector
 from doc_types.af import AfLineData, AfEditController, serializer as af_serializer
 from doc_types.mutex import MutexLineData, FEVMode, MutexEditController, serializer as mutex_serializer
 from infrastructure import load_document, save_document
@@ -27,7 +27,7 @@ class DocumentService:
     def __init__(self, nqs: INetlistQueryService):
         self._nqs: INetlistQueryService = nqs
         self._documents: dict[str, Document] = {}
-        self._conflict_stores: dict[str, ConflictStore] = {}
+        self._conflict_detectors: dict[str, ConflictDetector] = {}
         self._controllers: dict[DocumentType, IEditController] = {
             DocumentType.AF: AfEditController(self._nqs),
             DocumentType.MUTEX: MutexEditController(self._nqs),
@@ -41,7 +41,7 @@ class DocumentService:
         """Load a file into memory and return a summary."""
         doc = load_document(file_path, doc_type, self._nqs)
         self._documents[doc_id] = doc
-        self._build_conflict_store(doc_id, doc)
+        self._rebuild_conflicts(doc_id)
         return self._document_summary(doc_id, doc)
 
     def get_document(self, doc_id: str) -> Document:
@@ -60,15 +60,15 @@ class DocumentService:
     def get_lines(self, doc_id: str) -> list[dict]:
         """Return all lines in a document as JSON-friendly dicts."""
         doc = self._documents[doc_id]
-        store = self._conflict_stores.get(doc_id)
-        return [self._serialize_line(i, line, store, self._nqs) for i, line in enumerate(doc.lines)]
+        detector = self._conflict_detectors.get(doc_id)
+        return [self._serialize_line(i, line, detector) for i, line in enumerate(doc.lines)]
 
     def get_line(self, doc_id: str, line_id: str) -> dict:
         doc = self._documents[doc_id]
         line = doc.get_line(line_id)
         pos = doc.get_position(line_id)
-        store = self._conflict_stores.get(doc_id)
-        return self._serialize_line(pos, line, store, self._nqs)
+        detector = self._conflict_detectors.get(doc_id)
+        return self._serialize_line(pos, line, detector)
 
     # ------------------------------------------------------------------
     # Edit flow
@@ -132,12 +132,13 @@ class DocumentService:
         )
         doc.replace_line(line_id, new_line)
 
-        # Incrementally update conflict store for this line
-        self._update_conflict_for_line(doc_id, new_line)
+        # Full rebuild of conflict state (a single line change can
+        # create or resolve conflicts with arbitrarily many lines)
+        self._rebuild_conflicts(doc_id)
 
         pos = doc.get_position(line_id)
-        store = self._conflict_stores.get(doc_id)
-        return self._serialize_line(pos, new_line, store, self._nqs)
+        detector = self._conflict_detectors.get(doc_id)
+        return self._serialize_line(pos, new_line, detector)
 
     # ------------------------------------------------------------------
     # Save
@@ -228,12 +229,12 @@ class DocumentService:
         )
         doc.replace_line(line_id, new_line)
 
-        # Incrementally update conflict store for this line
-        self._update_conflict_for_line(doc_id, new_line)
+        # Full rebuild of conflict state
+        self._rebuild_conflicts(doc_id)
 
         pos = doc.get_position(line_id)
-        store = self._conflict_stores.get(doc_id)
-        return self._serialize_line(pos, new_line, store, self._nqs)
+        detector = self._conflict_detectors.get(doc_id)
+        return self._serialize_line(pos, new_line, detector)
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -241,11 +242,11 @@ class DocumentService:
 
     def _document_summary(self, doc_id: str, doc: Document) -> dict:
         from collections import Counter
-        store = self._conflict_stores.get(doc_id)
+        detector = self._conflict_detectors.get(doc_id)
         statuses = Counter(line.status.value for line in doc.lines)
-        if store:
+        if detector:
             conflict_count = sum(
-                1 for line in doc.lines if store.is_conflicting(line.line_id)
+                1 for line in doc.lines if detector.is_conflicting(line.line_id)
             )
             if conflict_count:
                 statuses["conflict"] = conflict_count
@@ -261,26 +262,22 @@ class DocumentService:
     def _serialize_line(
         position: int,
         line: DocumentLine,
-        conflict_store: Optional[ConflictStore] = None,
-        nqs: Optional[INetlistQueryService] = None,
+        detector: Optional[ConflictDetector] = None,
     ) -> dict:
         vr = line.validation_result
         status = line.status.value
 
         # Conflict overlay — if the line is in conflict, override display status
         conflict_info = None
-        if conflict_store is not None:
-            info = conflict_store.get_conflict_info(line.line_id)
+        if detector is not None:
+            info = detector.get_conflict_info(line.line_id)
             if info is not None:
                 status = LineStatus.CONFLICT.value
                 # Convert integer canonical net IDs to human-readable names
-                if nqs is not None:
-                    shared_nets = sorted(
-                        nqs.canonical_net_name(nid) or f"net#{nid}"
-                        for nid in info.shared_net_ids
-                    )
-                else:
-                    shared_nets = sorted(str(nid) for nid in info.shared_net_ids)
+                shared_nets = sorted(
+                    detector.canonical_net_name(nid) or f"net#{nid}"
+                    for nid in info.shared_net_ids
+                )
                 conflict_info = {
                     "conflicting_line_ids": sorted(info.conflicting_line_ids),
                     "shared_nets": shared_nets,
@@ -338,25 +335,14 @@ class DocumentService:
             raise ValueError(f"Document {doc_id} is not a MUTEX document")
         return self._controllers[DocumentType.MUTEX]
 
-    def _build_conflict_store(self, doc_id: str, doc: Document) -> None:
-        """Build the conflict store for all data lines in a document."""
-        store = ConflictStore()
-        for line in doc.lines:
-            if line.data is not None:
-                nets = resolve_line_nets(line.data, self._nqs)
-                store.update_line(line.line_id, nets)
-        self._conflict_stores[doc_id] = store
-
-    def _update_conflict_for_line(self, doc_id: str, line: DocumentLine) -> None:
-        """Incrementally update the conflict store for a single edited line."""
-        store = self._conflict_stores.get(doc_id)
-        if store is None:
-            return
-        if line.data is not None:
-            nets = resolve_line_nets(line.data, self._nqs)
-            store.update_line(line.line_id, nets)
-        else:
-            store.remove_line(line.line_id)
+    def _rebuild_conflicts(self, doc_id: str) -> None:
+        """Rebuild conflict state from scratch for all lines in a document."""
+        doc = self._documents[doc_id]
+        detector = self._conflict_detectors.get(doc_id)
+        if detector is None:
+            detector = ConflictDetector(self._nqs)
+            self._conflict_detectors[doc_id] = detector
+        detector.rebuild(doc.lines)
 
     @staticmethod
     def _serialize_mutex_session(ctrl: MutexEditController) -> dict:

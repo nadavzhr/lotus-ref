@@ -9,7 +9,7 @@ from core.interfaces import (
     IEditController,
     IEditSessionState,
 )
-from core.conflict_store import ConflictStore, ConflictInfo, resolve_line_nets
+from core.conflict_store import ConflictStore, ConflictInfo, ConflictDetector
 
 __all__ = [
     "DocumentType",
@@ -26,5 +26,5 @@ __all__ = [
     "IEditSessionState",
     "ConflictStore",
     "ConflictInfo",
-    "resolve_line_nets",
+    "ConflictDetector",
 ]

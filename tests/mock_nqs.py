@@ -15,12 +15,12 @@ class MockNetlistQueryService:
         self.canonical_map: dict[tuple[str, Optional[str]], str] = {}
         # Set of known template names
         self.templates: set[str] = set()
-        # Maps (template, net_name, net_regex) -> frozenset[int] of canonical IDs
-        self.canonical_id_map: dict[tuple, frozenset[int]] = {}
-        # Maps int -> str for canonical net name display
-        self.id_to_name: dict[int, str] = {}
         # Maps (template, net_name) -> set[str] of instance names
         self.instance_names_map: dict[tuple[str, str], set[str]] = {}
+        # Maps template -> set[str] of nets
+        self.nets_in_template: dict[str, set[str]] = {}
+        # Top cell name
+        self.top_cell: str = ""
 
     def find_matches(
         self,
@@ -38,23 +38,16 @@ class MockNetlistQueryService:
         """Return configured instance names, or empty set."""
         return self.instance_names_map.get((template, net_name), set())
 
-    def resolve_to_canonical_ids(
-        self,
-        template: Optional[str],
-        net_name: str,
-        template_regex: bool,
-        net_regex: bool,
-    ) -> frozenset[int]:
-        key = (template, net_name, net_regex)
-        return self.canonical_id_map.get(key, frozenset())
-
-    def canonical_net_name(self, net_id: int) -> Optional[str]:
-        return self.id_to_name.get(net_id)
-
     def get_canonical_net_name(
         self, net_name: str, template_name: Optional[str] = None
     ) -> Optional[str]:
         return self.canonical_map.get((net_name, template_name))
+
+    def get_all_nets_in_template(self, template: Optional[str] = None) -> set[str]:
+        return self.nets_in_template.get(template or self.top_cell, set())
+
+    def get_top_cell(self) -> str:
+        return self.top_cell
 
     def get_matching_templates(self, template_pattern: str, is_regex: bool) -> set[str]:
         """Return matching templates. For non-regex, check exact membership."""

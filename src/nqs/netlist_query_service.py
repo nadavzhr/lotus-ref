@@ -82,9 +82,6 @@ class NetlistQueryService:
         # Initialize SQLite database for efficient large querying
         logger.debug("Initializing SQLite database for netlist queries")
         self._init_database()
-
-        # Canonical net ID infrastructure for conflict detection
-        self._build_canonical_id_table()
         logger.debug("Finished initializing NetlistQueryService")
 
 
@@ -261,51 +258,6 @@ class NetlistQueryService:
             return set()
 
         return set(self._netlist.get_net_instance_names(normalized_template, canonical_name))
-
-    @lru_cache(maxsize=256)
-    def resolve_to_canonical_ids(
-        self,
-        template: Optional[str],
-        net_name: str,
-        template_regex: bool,
-        net_regex: bool,
-    ) -> frozenset[int]:
-        """
-        Resolve a rule pattern to top-cell canonical net IDs.
-
-        This is the primary entry point for conflict detection.  Given a
-        template/net pattern (with optional regex flags), it finds all
-        matching nets and maps them through the hierarchy to their
-        top-cell canonical net IDs (integers).
-
-        Returns a frozenset of integer canonical net IDs.
-        """
-        if not net_name:
-            return frozenset()
-
-        tpl_name = (template or self._top_cell)
-        tpl_name = tpl_name.lower() if not template_regex else tpl_name
-        net_norm = net_name.lower() if not net_regex else net_name
-
-        matching_templates = self._get_matching_templates(tpl_name, template_regex)
-        if not matching_templates:
-            return frozenset()
-
-        result_ids: set[int] = set()
-        for tpl in matching_templates:
-            resolved = self._resolve_matching_nets_in_template(
-                tpl, net_norm, net_regex,
-            )
-            for net in resolved:
-                ids = self._resolve_tpl_net_to_top_ids(tpl, net)
-                if ids:
-                    result_ids.update(ids)
-
-        return frozenset(result_ids)
-
-    def canonical_net_name(self, net_id: int) -> Optional[str]:
-        """Return the canonical net name string for a given integer ID."""
-        return self._id_net_map.get(net_id)
 
 ###########################################################################
 ############################ STATIC METHODS ##############################
@@ -660,73 +612,6 @@ class NetlistQueryService:
         ]
 
 ###########################################################################
-#################### CANONICAL NET ID — CONFLICT DETECTION ################
-###########################################################################
-
-    def _build_canonical_id_table(self) -> None:
-        """Assign integer IDs to all top-cell canonical nets."""
-        top_canonical = sorted(self._all_nets_in_templates.get(self._top_cell, set()))
-        self._net_id_map: dict[str, int] = {
-            name: i for i, name in enumerate(top_canonical)
-        }
-        self._id_net_map: dict[int, str] = dict(enumerate(top_canonical))
-        logger.debug(
-            "Canonical net ID table: %d top-cell nets", len(self._net_id_map),
-        )
-
-    @lru_cache(maxsize=8192)
-    def _resolve_tpl_net_to_top_ids(self, tpl: str, net: str) -> frozenset[int]:
-        """
-        Compute the top-cell canonical net IDs for a single
-        (template, canonical_net_within_template) pair.
-
-        Uses find_net_instance_names (which delegates to the netlist
-        library) to resolve through the hierarchy, then maps names to
-        integer IDs.
-
-        Results are cached so repeated lookups are free.
-        """
-        names = self.find_net_instance_names(tpl, net)
-        return frozenset(
-            self._net_id_map[n] for n in names if n in self._net_id_map
-        )
-
-    def _resolve_matching_nets_in_template(
-        self, template: str, net_name: str, net_regex: bool,
-    ) -> set[str]:
-        """
-        Find canonical nets within *template* that match *net_name*.
-
-        Returns a set of canonical-within-template net names.
-        """
-        if net_regex:
-            results = self._execute_sql_query(
-                """SELECT n.net_name FROM nets n
-                   JOIN templates t ON n.template_id = t.id
-                   WHERE t.name = ? AND n.net_name REGEXP ?""",
-                (template, net_name),
-            )
-            return {row[0] for row in results}
-
-        if self.has_bus_notation(net_name):
-            try:
-                expanded = NetlistQueryService.expand_bus_notation(
-                    net_name, max_expansions=self.MAX_BUS_EXPANSION,
-                )
-            except ValueError:
-                return set()
-            resolved: set[str] = set()
-            for name in expanded:
-                canonical = self._resolve_canonical_net_name(template, name)
-                if canonical:
-                    resolved.add(canonical)
-            return resolved
-
-        # Exact match (with alias resolution)
-        canonical = self._resolve_canonical_net_name(template, net_name)
-        return {canonical} if canonical else set()
-
-###########################################################################
 ############################ SQLITE DATABASE ##############################
 ###########################################################################
 
@@ -859,9 +744,7 @@ class NetlistQueryService:
             self.net_exists.cache_clear()
             self.find_matches.cache_clear()
             self.find_net_instance_names.cache_clear()
-            self.resolve_to_canonical_ids.cache_clear()
             self._resolve_canonical_net_name.cache_clear()
-            self._resolve_tpl_net_to_top_ids.cache_clear()
     
     def __del__(self):
         """Close database connection on cleanup."""

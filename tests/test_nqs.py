@@ -119,6 +119,31 @@ class TestFindMatches:
 
 
 # ==================================================================
+# find_net_instance_names
+# ==================================================================
+
+class TestFindNetInstanceNames:
+    """Test find_net_instance_names — delegates to netlist_parser."""
+
+    def test_top_cell_net_returns_itself(self, nqs):
+        names = nqs.find_net_instance_names("mycell", "in1")
+        assert "in1" in names
+
+    def test_template_port_resolves_through_hierarchy(self, nqs):
+        names = nqs.find_net_instance_names("d", "n3")
+        assert len(names) > 0
+        assert "in1" in names or any("n3" in n for n in names)
+
+    def test_nonexistent_template_returns_empty(self, nqs):
+        names = nqs.find_net_instance_names("nosuch", "n1")
+        assert names == set()
+
+    def test_nonexistent_net_returns_empty(self, nqs):
+        names = nqs.find_net_instance_names("d", "nonexistent")
+        assert names == set()
+
+
+# ==================================================================
 # Static helpers
 # ==================================================================
 
@@ -155,140 +180,3 @@ class TestLifecycle:
         builder = NetlistBuilder(logger=logging.getLogger("test"))
         with pytest.raises(RuntimeError):
             NetlistQueryService(cell="nosuchcell", spice_file=_SPICE_FILE, netlist=builder)
-
-
-# ==================================================================
-# Canonical net ID resolution (conflict detection infrastructure)
-# ==================================================================
-
-class TestCanonicalIdTable:
-    """Verify the canonical ID infrastructure is built correctly."""
-
-    def test_net_id_map_covers_all_top_cell_nets(self, nqs):
-        top_canonical = nqs._all_nets_in_templates[nqs._top_cell]
-        assert len(nqs._net_id_map) == len(top_canonical)
-        for name in top_canonical:
-            assert name in nqs._net_id_map
-
-    def test_id_net_map_is_inverse(self, nqs):
-        for name, nid in nqs._net_id_map.items():
-            assert nqs._id_net_map[nid] == name
-        for nid, name in nqs._id_net_map.items():
-            assert nqs._net_id_map[name] == nid
-
-    def test_canonical_net_name_method(self, nqs):
-        nid = nqs._net_id_map["in1"]
-        assert nqs.canonical_net_name(nid) == "in1"
-
-    def test_canonical_net_name_unknown(self, nqs):
-        assert nqs.canonical_net_name(-1) is None
-
-
-class TestFindNetInstanceNames:
-    """Test find_net_instance_names — delegates to netlist_parser."""
-
-    def test_top_cell_net_returns_itself(self, nqs):
-        names = nqs.find_net_instance_names("mycell", "in1")
-        assert "in1" in names
-
-    def test_template_port_resolves_through_hierarchy(self, nqs):
-        names = nqs.find_net_instance_names("d", "n3")
-        assert len(names) > 0
-        assert "in1" in names or any("n3" in n for n in names)
-
-    def test_nonexistent_template_returns_empty(self, nqs):
-        names = nqs.find_net_instance_names("nosuch", "n1")
-        assert names == set()
-
-    def test_nonexistent_net_returns_empty(self, nqs):
-        names = nqs.find_net_instance_names("d", "nonexistent")
-        assert names == set()
-
-
-class TestResolveToCanonicalIds:
-    """Test the core resolve_to_canonical_ids method."""
-
-    def test_top_cell_net_resolves(self, nqs):
-        ids = nqs.resolve_to_canonical_ids(None, "in1", False, False)
-        assert len(ids) == 1
-        nid = next(iter(ids))
-        assert nqs.canonical_net_name(nid) == "in1"
-
-    def test_alias_resolves_to_canonical(self, nqs):
-        """Hierarchical alias 'ia1/ib/n1' should resolve to 'in1'."""
-        ids = nqs.resolve_to_canonical_ids(None, "ia1/ib/n1", False, False)
-        assert len(ids) == 1
-        nid = next(iter(ids))
-        assert nqs.canonical_net_name(nid) == "in1"
-
-    def test_template_net_resolves_through_hierarchy(self, nqs):
-        """D:n3 should resolve to top-cell canonical nets."""
-        ids = nqs.resolve_to_canonical_ids("d", "n3", False, False)
-        assert len(ids) > 0
-        in1_id = nqs._net_id_map["in1"]
-        assert in1_id in ids
-
-    def test_hierarchical_conflict_d_n3_vs_c_n2(self, nqs):
-        """D:n3 and C:n2 must share at least one canonical net ID."""
-        d_ids = nqs.resolve_to_canonical_ids("d", "n3", False, False)
-        c_ids = nqs.resolve_to_canonical_ids("c", "n2", False, False)
-        overlap = d_ids & c_ids
-        assert len(overlap) > 0
-
-    def test_hierarchical_conflict_d_n3_vs_top_in1(self, nqs):
-        """D:n3 should conflict with top-cell in1."""
-        d_ids = nqs.resolve_to_canonical_ids("d", "n3", False, False)
-        top_ids = nqs.resolve_to_canonical_ids(None, "in1", False, False)
-        overlap = d_ids & top_ids
-        assert len(overlap) > 0
-
-    def test_no_conflict_between_unrelated_nets(self, nqs):
-        """Internal net d:gd1 should not overlap with top-cell in2."""
-        d_gd1_ids = nqs.resolve_to_canonical_ids("d", "gd1", False, False)
-        in2_ids = nqs.resolve_to_canonical_ids(None, "in2", False, False)
-        overlap = d_gd1_ids & in2_ids
-        assert len(overlap) == 0
-
-    def test_regex_resolves(self, nqs):
-        ids = nqs.resolve_to_canonical_ids("d", "n.*", False, True)
-        assert len(ids) > 0
-
-    def test_empty_net_returns_empty(self, nqs):
-        assert nqs.resolve_to_canonical_ids(None, "", False, False) == frozenset()
-
-    def test_nonexistent_template_returns_empty(self, nqs):
-        assert nqs.resolve_to_canonical_ids("nosuch", "n1", False, False) == frozenset()
-
-    def test_nonexistent_net_returns_empty(self, nqs):
-        assert nqs.resolve_to_canonical_ids("d", "nonexistent", False, False) == frozenset()
-
-    def test_consistency_with_find_net_instance_names(self, nqs):
-        """Instance names should be exactly the names behind the integer IDs."""
-        names = nqs.find_net_instance_names("d", "n3")
-        ids = nqs.resolve_to_canonical_ids("d", "n3", False, False)
-        id_names = {nqs.canonical_net_name(nid) for nid in ids}
-        assert id_names == names
-
-
-class TestLazyResolution:
-    """Verify that tpl-net-to-top mapping is computed lazily, not at startup."""
-
-    def test_cache_starts_empty(self, nqs):
-        info = nqs._resolve_tpl_net_to_top_ids.cache_info()
-        assert info.currsize == 0
-
-    def test_cache_populates_on_demand(self, nqs):
-        nqs.resolve_to_canonical_ids("d", "n3", False, False)
-        info = nqs._resolve_tpl_net_to_top_ids.cache_info()
-        assert info.currsize > 0
-        assert info.misses > 0
-
-    def test_repeated_queries_hit_cache(self, nqs):
-        nqs.resolve_to_canonical_ids("d", "n3", False, False)
-        info_after_first = nqs._resolve_tpl_net_to_top_ids.cache_info()
-
-        nqs.resolve_to_canonical_ids.cache_clear()
-        nqs.resolve_to_canonical_ids("d", "n3", False, False)
-        info_after_second = nqs._resolve_tpl_net_to_top_ids.cache_info()
-
-        assert info_after_second.hits > info_after_first.hits

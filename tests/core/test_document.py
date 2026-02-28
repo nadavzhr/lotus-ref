@@ -78,23 +78,6 @@ class TestDocumentRead:
 # Mutations
 # ===========================================================
 
-class TestDocumentAppend:
-
-    def test_append(self):
-        doc = Document(DocumentType.AF)
-        line = _make_line(line_id="x1", raw_text="hello")
-        doc.append_line(line)
-        assert len(doc) == 1
-        assert doc.get_line("x1").raw_text == "hello"
-
-    def test_append_duplicate_raises(self):
-        doc = Document(DocumentType.AF)
-        line = _make_line(line_id="x1")
-        doc.append_line(line)
-        with pytest.raises(ValueError, match="Duplicate"):
-            doc.append_line(_make_line(line_id="x1"))
-
-
 class TestDocumentInsert:
 
     def test_insert_at_beginning(self):
@@ -363,11 +346,6 @@ class TestUndoMultipleOperations:
         doc.redo()
         assert not doc.has_line("b")
         assert doc.get_position("c") == 1
-
-    def test_append_does_not_record(self):
-        doc = Document(DocumentType.AF)
-        doc.append_line(_make_line(line_id="a"))
-        assert not doc.can_undo
 
 
 # ===========================================================

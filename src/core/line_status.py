@@ -11,4 +11,3 @@ class LineStatus(Enum):
     WARNING = "warning"    # valid but has warnings (e.g. non-canonical net name)
     ERROR = "error"        # has validation or parse errors
     COMMENT = "comment"    # line is a comment (starts with #)
-    CONFLICT = "conflict"  # reserved — will indicate merge / edit conflicts

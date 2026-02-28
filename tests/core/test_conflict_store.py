@@ -79,6 +79,26 @@ class TestConflictStoreDetection:
         assert isinstance(info, ConflictInfo)
         assert info.conflicting_line_ids == {"L2"}
         assert info.shared_net_ids == frozenset({"net100"})
+        # Per-peer detail
+        assert "L2" in info.peers
+        assert info.peers["L2"] == frozenset({"net100"})
+
+    def test_per_line_conflicts_multi_peer(self):
+        """Each peer should list only the nets shared with *that* peer."""
+        store = ConflictStore()
+        store.update_line("L1", {"a", "b", "c", "x"})
+        store.update_line("L2", {"a", "b"})       # shares a, b with L1
+        store.update_line("L3", {"c", "d"})        # shares c with L1
+
+        per_line = store.get_per_line_conflicts("L1")
+        assert per_line["L2"] == frozenset({"a", "b"})
+        assert per_line["L3"] == frozenset({"c"})
+        assert "L1" not in per_line  # self excluded
+
+        info = store.get_conflict_info("L1")
+        assert info is not None
+        assert info.conflicting_line_ids == {"L2", "L3"}
+        assert info.shared_net_ids == frozenset({"a", "b", "c"})
 
 
 class TestConflictStoreUpdates:
@@ -276,6 +296,9 @@ class TestConflictDetectorRebuild:
         assert info is not None
         assert info.conflicting_line_ids == {"L2"}
         assert len(info.shared_net_ids) == 1
+        # Per-peer detail
+        assert "L2" in info.peers
+        assert "vdd" in info.peers["L2"]
 
     def test_mutex_line_resolves(self):
         nqs = _make_mock_nqs_for_detector()

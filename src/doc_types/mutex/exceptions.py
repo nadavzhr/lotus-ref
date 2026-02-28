@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from core.errors import DocumentError
 
 
-class MutexSessionError(DocumentError):
+class MutexSessionError(Exception):
     """Base class for all mutex session errors."""
 
 

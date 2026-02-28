@@ -272,9 +272,7 @@ class TestConflictDetection:
         try:
             svc.load("d1", path, DocumentType.AF)
             lines = svc.get_lines("d1")
-            # At least one line should show conflict status
-            statuses = [l["status"] for l in lines]
-            assert LineStatus.CONFLICT.value in statuses
+            assert any(l["is_conflict"] for l in lines)
         finally:
             os.unlink(path)
 
@@ -287,13 +285,12 @@ class TestConflictDetection:
         try:
             svc.load("d1", path, DocumentType.AF)
             lines = svc.get_lines("d1")
-            statuses = [l["status"] for l in lines]
-            assert LineStatus.CONFLICT.value not in statuses
+            assert all(not l["is_conflict"] for l in lines)
         finally:
             os.unlink(path)
 
-    def test_conflict_info_has_positions(self, svc: DocumentService):
-        """Conflict info should report the other line's position."""
+    def test_conflict_info_has_per_peer_detail(self, svc: DocumentService):
+        """Conflict info should report per-peer shared nets."""
         content = "{in1} 0.5 net-regular_em_sh\n{in1} 0.7 net-regular_em_sh\n"
         path = _write_tmp(content)
         try:
@@ -302,9 +299,12 @@ class TestConflictDetection:
             conflicts = [l for l in lines if l["conflict_info"] is not None]
             assert len(conflicts) >= 1
             info = conflicts[0]["conflict_info"]
-            assert "conflicting_positions" in info
-            assert "shared_nets" in info
-            assert len(info["shared_nets"]) > 0
+            assert "peers" in info
+            assert len(info["peers"]) >= 1
+            peer = info["peers"][0]
+            assert "position" in peer
+            assert "shared_nets" in peer
+            assert len(peer["shared_nets"]) > 0
         finally:
             os.unlink(path)
 
@@ -380,12 +380,12 @@ class TestDeleteLine:
             svc.load("d1", path, DocumentType.AF)
             # Both lines should conflict
             lines = svc.get_lines("d1")
-            assert any(l["status"] == "conflict" for l in lines)
+            assert any(l["is_conflict"] for l in lines)
             # Delete the second line
             svc.delete_line("d1", 1)
             # Remaining line should no longer conflict
             lines = svc.get_lines("d1")
-            assert all(l["status"] != "conflict" for l in lines)
+            assert all(not l["is_conflict"] for l in lines)
         finally:
             os.unlink(path)
 

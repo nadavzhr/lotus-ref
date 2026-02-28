@@ -130,7 +130,7 @@
   .lines-table tr.status-error td:first-child { border-left: 3px solid var(--red); }
   .lines-table tr.status-comment td:first-child { border-left: 3px solid var(--comment-color); }
   .lines-table tr.status-empty td:first-child { border-left: 3px solid var(--empty-color); }
-  .lines-table tr.status-conflict td:first-child { border-left: 3px solid var(--purple); }
+  .lines-table tr.conflict td:first-child { box-shadow: inset 3px 0 0 var(--purple); }
   .lines-table tr.status-comment td { color: var(--comment-color); }
   .lines-table tr.status-empty td { color: var(--empty-color); }
 
@@ -187,17 +187,23 @@
   .action-btn.del:hover { background: var(--red); color: var(--bg); }
   .action-btn.ins:hover { background: var(--teal); color: var(--bg); }
 
-  /* --- Edit panel --- */
-  .edit-panel {
-    background: var(--surface);
-    border: 1px solid var(--blue);
-    border-radius: 8px;
-    padding: 16px;
-    margin: 16px 0;
-    display: none;
+  /* --- Inline edit row --- */
+  .inline-edit-row > td {
+    padding: 0 !important;
+    border-bottom: 2px solid var(--blue);
   }
-  .edit-panel.open { display: block; }
-  .edit-panel h2 { margin-bottom: 12px; }
+  .inline-edit-panel {
+    background: var(--surface);
+    border-left: 3px solid var(--blue);
+    padding: 14px 16px;
+  }
+  .inline-edit-panel h3 {
+    color: var(--blue);
+    margin-bottom: 10px;
+    font-size: 13px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
   .edit-form { display: flex; flex-wrap: wrap; gap: 12px; }
   .field-group {
     display: flex;
@@ -442,6 +448,45 @@
     color: var(--subtext);
     margin-left: 4px;
   }
+
+  /* --- Comment Editor (inline row) --- */
+  .inline-comment-row > td {
+    padding: 0 !important;
+    border-bottom: 2px solid var(--comment-color);
+  }
+  .inline-comment-panel {
+    background: var(--surface);
+    border-left: 3px solid var(--comment-color);
+    padding: 12px 16px;
+  }
+  .inline-comment-panel h3 {
+    color: var(--comment-color);
+    margin-bottom: 8px;
+    font-size: 13px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .inline-comment-panel textarea {
+    background: var(--bg);
+    border: 1px solid var(--overlay);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 12px;
+    padding: 8px;
+    border-radius: 4px;
+    resize: vertical;
+    min-height: 60px;
+    width: 100%;
+  }
+  .inline-comment-panel textarea:focus {
+    outline: none;
+    border-color: var(--comment-color);
+  }
+  .inline-comment-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+  }
 </style>
 </head>
 <body>
@@ -482,24 +527,12 @@
         <option value="ok">OK</option>
         <option value="warning">Warning</option>
         <option value="error">Error</option>
-        <option value="conflict">Conflict</option>
         <option value="comment">Comment</option>
       </select>
       <label>
         <input type="checkbox" id="search-regex" onchange="onSearchInput()" style="width:14px;height:14px"> Regex
       </label>
       <span id="search-count" class="search-count"></span>
-    </div>
-
-    <!-- Edit panel -->
-    <div id="edit-panel" class="edit-panel">
-      <h2>Editing line <span id="edit-line-num"></span></h2>
-      <div id="edit-form" class="edit-form"></div>
-      <div class="edit-actions" id="edit-actions">
-        <button onclick="submitEdit()">Apply</button>
-        <button class="cancel-btn" onclick="closeEdit()">Cancel</button>
-      </div>
-      <div id="edit-result" class="edit-result"></div>
     </div>
 
     <table class="lines-table">
@@ -523,11 +556,13 @@ let currentDocId = null;
 let currentDocType = null;
 let editingPosition = null;
 let editingLineData = null;
+let editingDocType = null;
 let linesData = [];
 let mutexSession = null;
 let canUndo = false;
 let canRedo = false;
 let searchDebounceTimer = null;
+let lastEditResult = null;
 
 // ---- Helpers ----
 
@@ -541,12 +576,21 @@ function pillHtml(status) {
   return `<span class="pill pill-${status}">${status}</span>`;
 }
 
+function statusCellHtml(line) {
+  const conflictBadge = line.is_conflict
+    ? ' <span class="pill pill-conflict">conflict</span>'
+    : '';
+  return `${pillHtml(line.status)}${conflictBadge}`;
+}
+
 function badgeHtml(label, count, cls) {
   return `<span class="badge ${cls}">${label}: ${count}</span>`;
 }
 
 function showResult(msg, isSuccess) {
+  lastEditResult = { msg, isSuccess };
   const el = document.getElementById('edit-result');
+  if (!el) return;
   el.className = `edit-result show ${isSuccess ? 'success' : 'failure'}`;
   el.textContent = msg;
 }
@@ -735,32 +779,41 @@ function renderLines(lines) {
       ...line.warnings.map(w => `<span class="warn">⚠ ${esc(w)}</span>`),
     ];
 
-    // Show conflict info if present
-    if (line.conflict_info) {
-      const otherLines = line.conflict_info.conflicting_positions
-        .map(p => '#' + (p + 1))
-        .join(', ');
-      const nets = line.conflict_info.shared_nets.join(', ');
-      msgs.push(`<span style="color:var(--purple)">⚡ Conflicts with line${line.conflict_info.conflicting_positions.length > 1 ? 's' : ''} ${esc(otherLines)} (shared: ${esc(nets)})</span>`);
+    // Show conflict info if present (per-peer detail)
+    if (line.conflict_info && line.conflict_info.peers) {
+      for (const peer of line.conflict_info.peers) {
+        const lineRef = '#' + (peer.position + 1);
+        const nets = peer.shared_nets.join(', ');
+        msgs.push(`<span style="color:var(--purple)">⚡ Conflicts with line ${esc(lineRef)} (shared: ${esc(nets)})</span>`);
+      }
     }
 
     const editBtn = line.status !== 'comment'
-      ? `<button class="edit-btn" onclick="startEdit(${line.position})" title="Edit this line">Edit</button>`
-      : '';
+      ? `<button class="edit-btn" onclick="startEdit(${line.position})" title="Edit this line">✎ Edit</button>`
+      : `<button class="edit-btn" onclick="startCommentEdit(${line.position})" title="Edit comment text">✎ Edit</button>`;
     const cmtBtn = `<button class="action-btn cmt" onclick="toggleComment(${line.position})" title="Toggle comment">#</button>`;
     const upBtn = `<button class="action-btn swap" onclick="swapUp(${line.position})" title="Move up">▲</button>`;
     const dnBtn = `<button class="action-btn swap" onclick="swapDown(${line.position})" title="Move down">▼</button>`;
     const insBtn = `<button class="action-btn ins" onclick="insertLineAt(${line.position + 1})" title="Insert new line below">+</button>`;
     const delBtn = `<button class="action-btn del" onclick="deleteLine(${line.position})" title="Delete this line">×</button>`;
 
-    return `<tr class="status-${line.status}">
+    return `<tr class="status-${line.status}${line.is_conflict ? ' conflict' : ''}">
       <td class="line-num">${line.position + 1}</td>
-      <td class="line-status">${pillHtml(line.status)}</td>
+      <td class="line-status">${statusCellHtml(line)}</td>
       <td class="line-text">${esc(line.raw_text)}</td>
       <td class="line-messages">${msgs.join('<br>')}</td>
       <td class="edit-col">${editBtn}${cmtBtn}${upBtn}${dnBtn}${insBtn}${delBtn}</td>
     </tr>`;
   }).join('');
+
+  // Inject inline edit row if editing a data line
+  if (editingPosition !== null && editingLineData !== null) {
+    injectInlineEditRow();
+  }
+  // Inject inline comment edit row if editing a comment
+  if (commentEditingPosition !== null) {
+    injectInlineCommentRow();
+  }
 }
 
 // ---- Delete Line ----
@@ -853,6 +906,10 @@ async function doSwap(posA, posB) {
 // ---- Toggle Comment ----
 
 async function toggleComment(position) {
+  // Close any open editor on this line first to avoid state mismatch
+  if (editingPosition === position) closeEdit();
+  if (commentEditingPosition === position) cancelCommentEdit();
+
   try {
     const res = await fetch(
       `${API}/documents/${currentDocId}/lines/${position}/toggle-comment`,
@@ -872,6 +929,11 @@ async function toggleComment(position) {
 // ---- Edit Flow ----
 
 async function startEdit(position) {
+  // If already editing this line, do nothing (use Cancel to close)
+  if (editingPosition === position) return;
+  // Close any open comment editor
+  cancelCommentEdit();
+
   try {
     const res = await fetch(`${API}/documents/${currentDocId}/lines/${position}/session`, {
       method: 'PUT',
@@ -882,12 +944,15 @@ async function startEdit(position) {
     const result = await res.json();
     editingPosition = position;
     editingLineData = result.data;
+    editingDocType = result.doc_type;
+    lastEditResult = null;
 
-    document.getElementById('edit-line-num').textContent = `#${position + 1}`;
-    renderEditForm(result.doc_type, result.data);
-    document.getElementById('edit-panel').classList.add('open');
-    document.getElementById('edit-result').classList.remove('show');
-    document.getElementById('edit-panel').scrollIntoView({behavior: 'smooth'});
+    // Re-render to show inline edit row
+    renderLines(linesData);
+
+    // Scroll the inline edit row into view
+    const editRow = document.getElementById('inline-edit-row');
+    if (editRow) editRow.scrollIntoView({behavior: 'smooth', block: 'nearest'});
 
     // For mutex, load the session state
     if (result.doc_type === 'mutex') {
@@ -898,9 +963,40 @@ async function startEdit(position) {
   }
 }
 
+function injectInlineEditRow() {
+  const rowIdx = getRenderedRowIndex(editingPosition);
+  if (rowIdx < 0) return;
+  const tbody = document.getElementById('lines-body');
+  const targetRow = tbody.children[rowIdx];
+  if (!targetRow) return;
+
+  const editRow = document.createElement('tr');
+  editRow.className = 'inline-edit-row';
+  editRow.id = 'inline-edit-row';
+  editRow.innerHTML = `<td colspan="5">
+    <div class="inline-edit-panel">
+      <h3>Editing line #${editingPosition + 1}</h3>
+      <div id="edit-form" class="edit-form"></div>
+      <div class="edit-actions" id="edit-actions"></div>
+      <div id="edit-result" class="edit-result"></div>
+    </div>
+  </td>`;
+
+  targetRow.insertAdjacentElement('afterend', editRow);
+
+  // Populate the form
+  renderEditForm(editingDocType, editingLineData);
+
+  // Re-display stored result if any
+  if (lastEditResult) {
+    showResult(lastEditResult.msg, lastEditResult.isSuccess);
+  }
+}
+
 function renderEditForm(docType, data) {
   const form = document.getElementById('edit-form');
   const actions = document.getElementById('edit-actions');
+  if (!form || !actions) return;
 
   if (docType === 'af') {
     actions.innerHTML = `
@@ -1455,6 +1551,10 @@ async function commitToDocument() {
     } else {
       showResult(`Committed with errors: ${msgs.join('; ')}`, false);
     }
+    // Update editingLineData so the inline form shows committed values on re-render
+    if (data.data) {
+      editingLineData = data.data;
+    }
     // Commit is a recorded mutation — undo is now available
     updateUndoRedoState(true, false);
     await refreshLines();
@@ -1464,10 +1564,14 @@ async function commitToDocument() {
 }
 
 function closeEdit() {
-  document.getElementById('edit-panel').classList.remove('open');
   editingPosition = null;
   editingLineData = null;
+  editingDocType = null;
   mutexSession = null;
+  lastEditResult = null;
+  // Remove the inline edit row and re-render
+  const editRow = document.getElementById('inline-edit-row');
+  if (editRow) editRow.remove();
 }
 
 // ---- Save ----
@@ -1496,6 +1600,112 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('file-path').value =
     'C:/Projects/lotus-ref/data/cfg/mycell.af.dcfg';
 });
+
+// ==================================================================
+// Comment Editing
+// ==================================================================
+
+let commentEditingPosition = null;
+
+function startCommentEdit(position) {
+  // If already editing this comment, do nothing (use Cancel to close)
+  if (commentEditingPosition === position) return;
+  // Close any open data editor first
+  if (editingPosition !== null) closeEdit();
+  // If there's already a comment editor open, close it first
+  cancelCommentEdit();
+
+  commentEditingPosition = position;
+  const line = linesData[position];
+  if (!line) return;
+
+  // Re-render to inject the inline comment row
+  renderLines(linesData);
+
+  // Scroll into view and focus
+  const editRow = document.getElementById('inline-comment-row');
+  if (editRow) editRow.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+  const ta = document.getElementById(`comment-textarea-${position}`);
+  if (ta) {
+    ta.focus();
+    ta.select();
+  }
+}
+
+function injectInlineCommentRow() {
+  const rowIdx = getRenderedRowIndex(commentEditingPosition);
+  if (rowIdx < 0) return;
+  const tbody = document.getElementById('lines-body');
+  const targetRow = tbody.children[rowIdx];
+  if (!targetRow) return;
+
+  const line = linesData[commentEditingPosition];
+  if (!line) return;
+
+  const editRow = document.createElement('tr');
+  editRow.className = 'inline-comment-row';
+  editRow.id = 'inline-comment-row';
+  editRow.innerHTML = `<td colspan="5">
+    <div class="inline-comment-panel">
+      <h3># Editing comment on line #${commentEditingPosition + 1}</h3>
+      <textarea id="comment-textarea-${commentEditingPosition}" rows="3">${esc(line.raw_text)}</textarea>
+      <div class="inline-comment-actions">
+        <button class="save-btn small-btn" onclick="saveCommentEdit(${commentEditingPosition})">Save</button>
+        <button class="cancel-btn small-btn" onclick="cancelCommentEdit()">Cancel</button>
+      </div>
+    </div>
+  </td>`;
+
+  targetRow.insertAdjacentElement('afterend', editRow);
+}
+
+function getRenderedRowIndex(position) {
+  // The rendered table may be filtered; find which row corresponds to this position
+  const tbody = document.getElementById('lines-body');
+  for (let i = 0; i < tbody.children.length; i++) {
+    const lineNumCell = tbody.children[i].querySelector('.line-num');
+    if (lineNumCell && parseInt(lineNumCell.textContent) === position + 1) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+async function saveCommentEdit(position) {
+  const ta = document.getElementById(`comment-textarea-${position}`);
+  if (!ta) return;
+
+  const newText = ta.value;
+
+  try {
+    const res = await fetch(
+      `${API}/documents/${currentDocId}/lines/${position}/comment-text`,
+      {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ text: newText })
+      }
+    );
+    if (!res.ok) {
+      const err = await res.json();
+      alert(`Save comment failed: ${err.detail || res.statusText}`);
+      return;
+    }
+    commentEditingPosition = null;
+    updateUndoRedoState(true, false);
+    await refreshLines();
+  } catch (e) {
+    alert('Error saving comment: ' + e.message);
+  }
+}
+
+function cancelCommentEdit() {
+  if (commentEditingPosition === null) return;
+  commentEditingPosition = null;
+  // Remove the inline comment row
+  const editRow = document.getElementById('inline-comment-row');
+  if (editRow) editRow.remove();
+}
 </script>
 </body>
 </html>

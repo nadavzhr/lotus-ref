@@ -113,7 +113,7 @@ class DocumentService:
                            ``raw_text``.  Empty string matches everything.
             use_regex:     Treat *query* as a regex pattern.
             status_filter: Optional status value to restrict results
-                           (e.g. ``"error"``, ``"conflict"``).
+                           (e.g. ``"error"``).
 
         Returns:
             List of serialized line dicts for matching lines.
@@ -139,13 +139,8 @@ class DocumentService:
                 elif query.lower() not in line.raw_text.lower():
                     continue
 
-            # Determine effective status (accounting for conflicts)
-            effective_status = line.status.value
-            if detector and detector.is_conflicting(line.line_id):
-                effective_status = LineStatus.CONFLICT.value
-
             # Status filter
-            if status_filter and effective_status != status_filter:
+            if status_filter and line.status.value != status_filter:
                 continue
 
             results.append(self._serialize_line(pos, line, detector, doc))
@@ -342,6 +337,38 @@ class DocumentService:
         logger.info("%s line at pos=%d in doc=%s", action.title(), position, doc_id)
         return self._serialize_line(position, new_line, detector, doc)
 
+    def edit_comment_text(self, doc_id: str, position: int, new_text: str) -> dict:
+        """Edit the raw text of a comment line.
+
+        The line must currently be a comment. The *new_text* is stored
+        as-is (it should already include the ``# `` prefix).  If the
+        caller sends text without a leading ``#``, we prepend ``# ``.
+
+        The operation is recorded for undo/redo via ``replace_line``.
+        """
+        doc = self._documents[doc_id]
+        old_line = doc[position]
+        handler = get_handler(doc.doc_type)
+
+        if not handler.is_comment(old_line.raw_text):
+            raise ValueError("Line is not a comment — use the regular edit flow")
+
+        # Ensure the text stays a comment
+        raw = new_text
+        if not raw.lstrip().startswith("#"):
+            raw = self._COMMENT_PREFIX + raw
+
+        new_line = DocumentLine(
+            line_id=old_line.line_id,
+            raw_text=raw,
+            validation_result=ValidationResult(status=LineStatus.COMMENT),
+        )
+        doc.replace_line(old_line.line_id, new_line)
+
+        logger.info("Edited comment text at pos=%d in doc=%s", position, doc_id)
+        detector = self._conflict_detectors.get(doc_id)
+        return self._serialize_line(position, new_line, detector, doc)
+
     # ------------------------------------------------------------------
     # Save
     # ------------------------------------------------------------------
@@ -477,23 +504,24 @@ class DocumentService:
         vr = line.validation_result
         status = line.status.value
 
-        # Conflict overlay — if the line is in conflict, override display status
+        # Conflict overlay — surfaced separately from primary validation status
         conflict_info = None
+        is_conflict = False
         if detector is not None:
             info = detector.get_conflict_info(line.line_id)
             if info is not None:
-                status = LineStatus.CONFLICT.value
-                # Net names are already human-readable strings
-                shared_nets = sorted(info.shared_net_ids)
-                # Translate internal line_ids to 0-based positions for the frontend
-                conflicting_positions = sorted(
-                    doc.get_position(lid)
-                    for lid in info.conflicting_line_ids
-                ) if doc is not None else []
-                conflict_info = {
-                    "conflicting_positions": conflicting_positions,
-                    "shared_nets": shared_nets,
-                }
+                is_conflict = True
+                # Build per-peer detail: each entry tells the UI which
+                # nets are shared with a specific other line.
+                peers: list[dict] = []
+                for peer_lid, shared in info.peers.items():
+                    peer_pos = doc.get_position(peer_lid) if doc is not None else -1
+                    peers.append({
+                        "position": peer_pos,
+                        "shared_nets": sorted(shared),
+                    })
+                peers.sort(key=lambda p: p["position"])
+                conflict_info = {"peers": peers}
 
         result = {
             "position": position,
@@ -502,6 +530,7 @@ class DocumentService:
             "errors": vr.errors,
             "warnings": vr.warnings,
             "has_data": line.data is not None,
+            "is_conflict": is_conflict,
             "conflict_info": conflict_info,
         }
         if line.data is not None:

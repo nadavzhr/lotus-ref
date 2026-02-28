@@ -153,16 +153,34 @@ class ConflictStore:
                 result.add(net)
         return frozenset(result)
 
+    def get_per_line_conflicts(self, line_id: str) -> dict[str, frozenset[str]]:
+        """Return a mapping of peer_line_id → frozenset of shared nets.
+
+        For each line that conflicts with *line_id*, this tells you
+        *exactly* which nets are shared with that specific peer.
+        Returns an empty dict when the line is not in conflict.
+        """
+        nets = self._line_nets.get(line_id)
+        if not nets:
+            return {}
+        peers: dict[str, set[str]] = {}
+        for net in nets:
+            owners = self._net_lines.get(net)
+            if owners and len(owners) > 1:
+                for other in owners:
+                    if other != line_id:
+                        peers.setdefault(other, set()).add(net)
+        return {pid: frozenset(snets) for pid, snets in peers.items()}
+
     def get_conflict_info(self, line_id: str) -> Optional["ConflictInfo"]:
         """
         Return a :class:`ConflictInfo` for *line_id*, or ``None`` if the
         line is not in conflict.
         """
-        net_ids = self.get_conflicting_net_ids(line_id)
-        if not net_ids:
+        per_line = self.get_per_line_conflicts(line_id)
+        if not per_line:
             return None
-        lines = self.get_conflicting_lines(line_id)
-        return ConflictInfo(conflicting_line_ids=frozenset(lines), shared_net_ids=net_ids)
+        return ConflictInfo(peers=per_line)
 
     # ------------------------------------------------------------------
     # Internals
@@ -181,11 +199,29 @@ class ConflictStore:
                     del self._net_lines[net]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class ConflictInfo:
-    """Lightweight snapshot of conflict data for a single line."""
-    conflicting_line_ids: frozenset[str]
-    shared_net_ids: frozenset[str]
+    """Conflict data for a single line, broken down per peer.
+
+    ``peers`` maps each conflicting line_id to the frozenset of
+    canonical net names shared between *this* line and that peer.
+    This enables the UI to display per-conflict-line detail, e.g.
+    "conflicts with line 3 on {a, b} and line 4 on {c}".
+    """
+    peers: dict[str, frozenset[str]]
+
+    @property
+    def conflicting_line_ids(self) -> frozenset[str]:
+        """All peer line_ids (convenience shortcut)."""
+        return frozenset(self.peers)
+
+    @property
+    def shared_net_ids(self) -> frozenset[str]:
+        """Union of all shared nets across all peers."""
+        result: set[str] = set()
+        for nets in self.peers.values():
+            result.update(nets)
+        return frozenset(result)
 
 
 # ------------------------------------------------------------------
@@ -306,7 +342,7 @@ class ConflictDetector:
                 tpl_name, net_norm, template_regex, net_regex,
             )
             for qualified_net in matching_nets:
-                if ":" in qualified_net:
+                if tpl_name is not None and ":" in qualified_net:
                     tpl, net = qualified_net.split(":", 1)
                 else:
                     tpl, net = self._top_cell, qualified_net
@@ -418,6 +454,9 @@ class ConflictDetector:
 
     def get_conflicting_net_ids(self, line_id: str) -> frozenset[str]:
         return self._store.get_conflicting_net_ids(line_id)
+
+    def get_per_line_conflicts(self, line_id: str) -> dict[str, frozenset[str]]:
+        return self._store.get_per_line_conflicts(line_id)
 
     def get_conflict_info(self, line_id: str) -> Optional[ConflictInfo]:
         return self._store.get_conflict_info(line_id)

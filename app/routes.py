@@ -42,6 +42,10 @@ class EditRequest(BaseModel):
     fields: Optional[dict] = None
 
 
+class EditCommentRequest(BaseModel):
+    text: str
+
+
 class SaveRequest(BaseModel):
     file_path: Optional[str] = None
 
@@ -142,7 +146,7 @@ def search_lines(
     Query params:
         q:      Substring or regex to match in raw_text.
         regex:  If true, treat *q* as a regex.
-        status: Filter to a specific status (e.g. "error", "conflict").
+        status: Filter to a specific status (e.g. "error").
     """
     try:
         return svc().search_lines(doc_id, q, use_regex=regex, status_filter=status)
@@ -181,6 +185,19 @@ def toggle_comment(doc_id: str, position: int):
         return svc().toggle_comment(doc_id, position)
     except (KeyError, IndexError):
         raise HTTPException(404, "Document or line not found")
+    except Exception as e:
+        raise HTTPException(422, str(e))
+
+
+@router.put("/documents/{doc_id}/lines/{position}/comment-text")
+def edit_comment_text(doc_id: str, position: int, req: EditCommentRequest):
+    """Edit the raw text of a comment line."""
+    try:
+        return svc().edit_comment_text(doc_id, position, req.text)
+    except (KeyError, IndexError):
+        raise HTTPException(404, "Document or line not found")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(422, str(e))
 
@@ -350,6 +367,3 @@ def mutex_set_num_active(doc_id: str, position: int, req: MutexNumActiveRequest)
         return svc().mutex_set_num_active(doc_id, req.value)
     except Exception as e:
         raise HTTPException(422, str(e))
-
-
-# commit_mutex_edit removed — use the unified POST /lines/{position}/commit instead

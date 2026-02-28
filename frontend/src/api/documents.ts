@@ -4,6 +4,7 @@
  */
 
 import * as http from "./client";
+import { logInfo } from "./client";
 
 /* ---------- Types ---------- */
 
@@ -35,16 +36,18 @@ export interface DocumentLine {
 
 /* ---------- Endpoints ---------- */
 
-export function loadDocument(
+export async function loadDocument(
   docId: string,
   filePath: string,
   docType: string,
 ): Promise<DocumentSummary> {
-  return http.post("/documents/load", {
+  const summary = await http.post<DocumentSummary>("/documents/load", {
     doc_id: docId,
     file_path: filePath,
     doc_type: docType,
   });
+  logInfo(`Loaded ${docType.toUpperCase()} document: ${filePath} (${summary.total_lines} lines)`);
+  return summary;
 }
 
 export function listDocuments(): Promise<DocumentSummary[]> {
@@ -117,13 +120,16 @@ export function commitEdit(
   return http.post(`/documents/${docId}/lines/${position}/commit`);
 }
 
-export function saveDocument(
+export async function saveDocument(
   docId: string,
   filePath?: string,
 ): Promise<{ file_path: string }> {
-  return http.post(`/documents/${docId}/save`, {
-    file_path: filePath ?? null,
-  });
+  const result = await http.post<{ file_path: string }>(
+    `/documents/${docId}/save`,
+    { file_path: filePath ?? null },
+  );
+  logInfo(`Saved document to: ${result.file_path}`);
+  return result;
 }
 
 export function undo(docId: string): Promise<{ can_undo: boolean; can_redo: boolean }> {

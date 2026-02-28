@@ -107,14 +107,20 @@ class MutexEditSessionState:
         if entry in self._mutexed:
             raise DuplicateEntryError(f"Entry {entry} is already in the mutexed set.")
 
-        if self.template is not None and entry.template_name != self.template:
+        if not self._loading and not entry.matches:
+            raise NoMatchesError(f"Entry {entry} must resolve to at least one net.")
+
+        # If this is the first entry, accept any template (including None)
+        if not self._mutexed:
+            self._mutexed.add(entry)
+            return
+
+        # After the first entry, require exact template match (including None)
+        if entry.template_name != self.template:
             raise TemplateMismatchError(
                 f"Entry {entry} has template {entry.template_name!r} "
                 f"which does not match session template {self.template!r}."
             )
-
-        if not self._loading and not entry.matches:
-            raise NoMatchesError(f"Entry {entry} must resolve to at least one net.")
 
         if (
             self.regex_mode is not None

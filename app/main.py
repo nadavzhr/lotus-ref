@@ -18,7 +18,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from services.document_service import DocumentService
+from services.chat_service import ChatService
 from app.routes import router, init_service
+from app.chat_routes import router as chat_router, init_chat_service
 from nqs.netlist_query_service import NetlistQueryService
 from nqs.netlist_parser.NetlistBuilder import NetlistBuilder
 
@@ -34,10 +36,16 @@ nqs = NetlistQueryService(cell=cell, spice_file=_spice_file, netlist=NetlistBuil
 # _spice_file2 = _project_root / "tmp" / cell / "spice" / f"{cell}.sp"
 # nqs = NetlistQueryService(cell=cell, spice_file=_spice_file2, netlist=NetlistBuilder(logger=logging.getLogger(__name__)))
 
-init_service(DocumentService(nqs=nqs))
+_doc_service = DocumentService(nqs=nqs)
+init_service(_doc_service)
+
+# Chat service (Copilot SDK) — gracefully degrades if CLI not installed
+_chat_service = ChatService(_doc_service)
+init_chat_service(_chat_service)
 
 # API routes
 app.include_router(router)
+app.include_router(chat_router)
 
 # Serve static frontend
 _static_dir = Path(__file__).resolve().parent / "static"

@@ -12,6 +12,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      "/api/chat/ws": {
+        target: "ws://localhost:8000",
+        ws: true,
+      },
       "/api": {
         target: "http://localhost:8000",
         changeOrigin: true,

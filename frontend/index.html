@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lotus Editor</title>
+    <script>
+      /* Hydrate theme class before first paint to prevent flash */
+      (function () {
+        const stored = localStorage.getItem("lotus-theme");
+        const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        const theme = stored === "light" ? "light" : stored === "dark" ? "dark" : prefersDark ? "dark" : "light";
+        document.documentElement.classList.add(theme);
+      })();
+    </script>
+  </head>
+  <body class="min-h-screen bg-background font-mono text-foreground antialiased">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,156 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Design tokens — semantic color system.
+ * All components use these tokens via Tailwind utilities (bg-background, text-foreground, etc.)
+ * NO raw color classes (bg-white, text-black, etc.) anywhere in components.
+ */
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+
+    --primary: 240 5.9% 10%;
+    --primary-foreground: 0 0% 98%;
+
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 240 5.9% 64.9%;
+
+    --radius: 0.5rem;
+
+    /* Sidebar */
+    --sidebar: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+
+    /* Status tokens */
+    --status-ok: 142 71% 45%;
+    --status-warning: 38 92% 50%;
+    --status-error: 0 84% 60%;
+    --status-info: 217 91% 60%;
+  }
+
+  .dark {
+    --background: 220 14% 13%;
+    --foreground: 220 16% 90%;
+
+    --card: 220 14% 16%;
+    --card-foreground: 220 16% 90%;
+
+    --popover: 220 14% 16%;
+    --popover-foreground: 220 16% 90%;
+
+    --primary: 220 16% 90%;
+    --primary-foreground: 220 14% 13%;
+
+    --secondary: 220 11% 22%;
+    --secondary-foreground: 220 16% 90%;
+
+    --muted: 220 11% 22%;
+    --muted-foreground: 220 8% 58%;
+
+    --accent: 220 11% 24%;
+    --accent-foreground: 220 16% 90%;
+
+    --destructive: 0 68% 42%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 220 11% 24%;
+    --input: 220 11% 24%;
+    --ring: 220 13% 72%;
+
+    /* Sidebar */
+    --sidebar: 220 14% 10%;
+    --sidebar-foreground: 220 12% 84%;
+
+    /* Status tokens */
+    --status-ok: 142 69% 58%;
+    --status-warning: 45 93% 58%;
+    --status-error: 0 91% 71%;
+    --status-info: 217 91% 70%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Dialog zoom-from-origin animation                                    */
+/* ------------------------------------------------------------------ */
+/* The translate(-50%,-50%) is baked into the keyframes so we can      */
+/* freely set transform-origin to the clicked row's direction.          */
+
+@keyframes dialog-enter {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@keyframes dialog-exit {
+  from {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.95);
+  }
+}
+
+@keyframes overlay-enter {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes overlay-exit {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+/* Scrollbar styling (subtle) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.3);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.5);
+}
